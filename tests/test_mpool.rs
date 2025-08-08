@@ -53,12 +53,20 @@ async fn test_drop_conn() {
     assert_eq!(pool.active_count().unwrap(), 1);
     let conn2 = pool.get().await.unwrap();
     assert_eq!(pool.active_count().unwrap(), 2);
+
+    // When connections are dropped, they should return to idle state
     drop(conn1);
-    assert_eq!(pool.active_count().unwrap(), 2);
+    assert_eq!(pool.active_count().unwrap(), 1); // conn1 is now idle
+    assert_eq!(pool.idle_count().unwrap(), 1);
+
     drop(conn2);
-    assert_eq!(pool.active_count().unwrap(), 2);
-    let _ = pool.get().await.unwrap();
-    assert_eq!(pool.active_count().unwrap(), 2);
+    assert_eq!(pool.active_count().unwrap(), 0); // both connections are idle
+    assert_eq!(pool.idle_count().unwrap(), 2);
+
+    // Get a connection again, should reuse existing idle connection
+    let _conn3 = pool.get().await.unwrap();
+    assert_eq!(pool.active_count().unwrap(), 1); // one connection active
+    assert_eq!(pool.idle_count().unwrap(), 1); // one connection idle
 }
 
 #[tokio::test]
