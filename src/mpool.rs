@@ -53,6 +53,8 @@ pub struct PoolStats {
     pub active: u32,
     /// Number of idle connections in the pool.
     pub idle: usize,
+    /// Total number of connections (active + idle).
+    pub total: u32,
     /// Maximum number of connections allowed.
     pub max_size: u32,
 }
@@ -287,45 +289,80 @@ impl<M: ManageConnection> Pool<M> {
         self.with_internals(|internals| internals.conns.len())
     }
 
+    /// Returns the total number of connections (active + idle).
+    /// This method is primarily intended for testing and monitoring.
+    pub fn total_count(&self) -> io::Result<u32> {
+        self.with_internals(|internals| {
+            internals.active.load(Ordering::SeqCst) + internals.conns.len() as u32
+        })
+    }
+
+    /// Check if the pool is at maximum capacity.
+    pub fn is_at_capacity(&self) -> io::Result<bool> {
+        let max_size = self.inner.max_size;
+        if max_size == 0 {
+            return Ok(false); // No limit
+        }
+
+        let total = self.total_count()?;
+        Ok(total >= max_size)
+    }
+
     /// Returns statistics about the pool.
     /// This method is primarily intended for testing and monitoring.
     pub fn stats(&self) -> io::Result<PoolStats> {
-        self.with_internals(|internals| PoolStats {
-            active: internals.active.load(Ordering::SeqCst),
-            idle: internals.conns.len(),
-            max_size: self.inner.max_size,
+        self.with_internals(|internals| {
+            let active = internals.active.load(Ordering::SeqCst);
+            let idle = internals.conns.len();
+            PoolStats {
+                active,
+                idle,
+                total: active + idle as u32,
+                max_size: self.inner.max_size,
+            }
         })
     }
 
     fn interval(&self) -> Result<MutexGuard<PoolInternals<M::Connection>>, io::Error> {
-        self.inner.intervals.lock().map_err(|_| {
-            // Log the poisoned mutex for debugging
-            eprintln!("Warning: Pool mutex was poisoned, attempting recovery");
-            std::io::Error::other("Pool mutex poisoned")
+        self.inner.intervals.lock().map_err(|e| {
+            // Log the poisoned mutex for debugging with more context
+            eprintln!(
+                "Error: Pool mutex was poisoned: {}. This indicates a panic occurred while holding the lock.",
+                e
+            );
+            std::io::Error::other("Pool mutex poisoned - pool may be in inconsistent state")
         })
     }
 
-    /// Force recovery from poisoned mutex by recreating the pool internals
-    /// This is a last resort recovery method
-    pub fn force_recovery(&self) -> io::Result<()> {
-        // Note: This is a destructive operation that will lose all idle connections
-        // but it allows the pool to continue functioning
-        // In a production system, you might want to log this event
-        eprintln!("Warning: Forcing pool recovery - all idle connections will be lost");
+    /// Attempt to recover from a poisoned mutex
+    /// This is a last resort recovery method that tries to extract data from poisoned mutex
+    pub fn force_recovery(&self) -> io::Result<PoolStats> {
+        match self.inner.intervals.lock() {
+            Ok(internals) => {
+                // Mutex is not poisoned, return current stats
+                Ok(PoolStats {
+                    active: internals.active.load(Ordering::SeqCst),
+                    idle: internals.conns.len(),
+                    total: internals.active.load(Ordering::SeqCst) + internals.conns.len() as u32,
+                    max_size: self.inner.max_size,
+                })
+            }
+            Err(poisoned) => {
+                eprintln!("Warning: Attempting to recover from poisoned mutex");
 
-        // Try to access the atomic counter directly through unsafe operations
-        // This is safe because AtomicU32 operations are always safe
-        let current_active = self
-            .inner
-            .intervals
-            .lock()
-            .map(|internals| internals.active.load(Ordering::SeqCst))
-            .unwrap_or(0);
+                // Access the data inside the poisoned mutex
+                let internals = poisoned.into_inner();
+                let stats = PoolStats {
+                    active: internals.active.load(Ordering::SeqCst),
+                    idle: internals.conns.len(),
+                    total: internals.active.load(Ordering::SeqCst) + internals.conns.len() as u32,
+                    max_size: self.inner.max_size,
+                };
 
-        // For now, we just report the issue - in a real implementation
-        // you might want to replace the mutex entirely
-        eprintln!("Current active connections: {}", current_active);
-        Ok(())
+                eprintln!("Recovery stats: {:?}", stats);
+                Ok(stats)
+            }
+        }
     }
 
     fn with_internals<T, F>(&self, f: F) -> io::Result<T>
@@ -366,53 +403,100 @@ impl<M: ManageConnection> Pool<M> {
 
     async fn check(self) {
         if let Some(interval) = self.inner.check_interval {
+            let mut consecutive_errors = 0;
+            const MAX_CONSECUTIVE_ERRORS: u32 = 5;
+
             loop {
                 sleep(interval).await;
 
                 // Safely get the number of idle connections
                 let n = match self.idle_count() {
-                    Ok(count) => count,
-                    Err(_) => {
-                        eprintln!("Warning: Failed to get idle count, attempting pool recovery");
-                        let _ = self.force_recovery();
+                    Ok(count) => {
+                        consecutive_errors = 0; // Reset error counter on success
+                        count
+                    }
+                    Err(e) => {
+                        consecutive_errors += 1;
+                        eprintln!(
+                            "Warning: Failed to get idle count (attempt {}/{}): {}",
+                            consecutive_errors, MAX_CONSECUTIVE_ERRORS, e
+                        );
+
+                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                            eprintln!(
+                                "Error: Too many consecutive failures, attempting pool recovery"
+                            );
+                            match self.force_recovery() {
+                                Ok(stats) => {
+                                    eprintln!("Pool recovery successful: {:?}", stats);
+                                    consecutive_errors = 0;
+                                }
+                                Err(recovery_err) => {
+                                    eprintln!("Fatal: Pool recovery failed: {}", recovery_err);
+                                    break; // Exit check loop if recovery fails
+                                }
+                            }
+                        }
                         continue;
                     }
                 };
 
-                // Process each idle connection for health checking
-                for _ in 0..n {
-                    let conn_result = self.pop_front();
+                // Process connections in smaller batches to reduce lock contention
+                const BATCH_SIZE: usize = 5;
+                let batches = (n + BATCH_SIZE - 1) / BATCH_SIZE; // Ceiling division
 
-                    match conn_result {
-                        Ok(Some(mut conn)) => {
-                            let should_drop =
-                                self.exceed_idle_timeout(&conn) || self.exceed_max_lifetime(&conn);
+                for batch in 0..batches {
+                    let batch_size = std::cmp::min(BATCH_SIZE, n - batch * BATCH_SIZE);
 
-                            if should_drop {
-                                // Connection expired, just drop it
-                                // No need to adjust counters as it was idle
-                                continue;
+                    for _ in 0..batch_size {
+                        let conn_result = self.pop_front();
+
+                        match conn_result {
+                            Ok(Some(mut conn)) => {
+                                let should_drop = self.exceed_idle_timeout(&conn)
+                                    || self.exceed_max_lifetime(&conn);
+
+                                if should_drop {
+                                    // Connection expired, just drop it
+                                    // Note: This was an idle connection, so no active count change needed
+                                    continue;
+                                }
+
+                                // Check connection health
+                                match self.inner.manager.check(&mut conn.conn).await {
+                                    Ok(_) => {
+                                        // Connection is healthy, put it back
+                                        if let Err(e) = self.push_back(conn) {
+                                            eprintln!(
+                                                "Warning: Failed to return healthy connection to pool: {}",
+                                                e
+                                            );
+                                        }
+                                    }
+                                    Err(check_err) => {
+                                        // Connection is unhealthy, drop it
+                                        eprintln!(
+                                            "Info: Dropped unhealthy connection: {}",
+                                            check_err
+                                        );
+                                        // Note: This was an idle connection, so no active count change needed
+                                    }
+                                }
                             }
-
-                            // Check connection health
-                            match self.inner.manager.check(&mut conn.conn).await {
-                                Ok(_) => {
-                                    // Connection is healthy, put it back
-                                    let _ = self.push_back(conn);
-                                }
-                                Err(_) => {
-                                    // Connection is unhealthy, drop it
-                                    // No need to adjust counters as it was idle
-                                }
+                            Ok(None) => break, // No more connections in this batch
+                            Err(e) => {
+                                eprintln!(
+                                    "Warning: Error accessing connection pool during health check: {}",
+                                    e
+                                );
+                                break;
                             }
                         }
-                        Ok(None) => break, // No more connections
-                        Err(_) => {
-                            eprintln!(
-                                "Warning: Error accessing connection pool during health check"
-                            );
-                            break;
-                        }
+                    }
+
+                    // Small delay between batches to allow other operations
+                    if batch < batches - 1 {
+                        tokio::task::yield_now().await;
                     }
                 }
             }
@@ -448,69 +532,62 @@ impl<M: ManageConnection> Pool<M> {
     /// Waits for at most the configured connection timeout before returning an
     /// error.
     pub async fn get(&self) -> io::Result<Connection<M>> {
-        // First, try to get an existing idle connection
-        if let Some(conn) = self.pop_front()? {
-            // Successfully got an idle connection, mark it as active
-            self.inner
-                .intervals
-                .lock()
-                .map(|internals| {
-                    internals.active.fetch_add(1, Ordering::SeqCst);
-                })
-                .unwrap_or(());
+        // Attempt to get an existing connection or reserve a slot for new connection
+        let operation_result = self.with_internals(|internals| {
+            // First, try to get an existing idle connection
+            if let Some(conn) = internals.conns.pop_front() {
+                // Successfully got an idle connection, mark it as active
+                internals.active.fetch_add(1, Ordering::SeqCst);
+                return Ok(Some(conn)); // Return existing connection
+            }
 
-            return Ok(Connection {
-                conn: Some(conn),
-                pool: self.clone(),
-            });
-        }
-
-        // No idle connections available, try to create a new one
-        // Atomically check and increment active count
-        let can_create = self.with_internals(|internals| {
+            // No idle connections available, check if we can create a new one
             let max_size = self.inner.max_size;
             let current_active = internals.active.load(Ordering::SeqCst);
             let current_idle = internals.conns.len() as u32;
             let total_connections = current_active + current_idle;
 
             if max_size > 0 && total_connections >= max_size {
-                false // Cannot create new connection
-            } else {
-                // Reserve a slot by incrementing active count
-                internals.active.fetch_add(1, Ordering::SeqCst);
-                true
+                return Err(std::io::Error::other(
+                    "Connection pool is at maximum capacity",
+                ));
             }
+
+            // Reserve a slot by incrementing active count
+            internals.active.fetch_add(1, Ordering::SeqCst);
+            Ok(None) // Need to create new connection
         })?;
 
-        if !can_create {
-            return Err(std::io::Error::other(
-                "Connection pool is at maximum capacity",
-            ));
+        match operation_result? {
+            Some(conn) => {
+                // Return existing connection
+                Ok(Connection {
+                    conn: Some(conn),
+                    pool: self.clone(),
+                })
+            }
+            None => {
+                // Create new connection
+                let conn = self
+                    .get_timeout(self.inner.connection_timeout)
+                    .await
+                    .inspect_err(|_e| {
+                        // If creation fails, decrease active count
+                        if let Ok(internals) = self.inner.intervals.lock() {
+                            internals.active.fetch_sub(1, Ordering::SeqCst);
+                        }
+                    })?;
+
+                Ok(Connection {
+                    conn: Some(IdleConn {
+                        conn,
+                        last_visited: Instant::now(),
+                        created: Instant::now(),
+                    }),
+                    pool: self.clone(),
+                })
+            }
         }
-
-        // Create new connection
-        let conn = self
-            .get_timeout(self.inner.connection_timeout)
-            .await
-            .inspect_err(|_e| {
-                // If creation fails, decrease active count
-                self.inner
-                    .intervals
-                    .lock()
-                    .map(|internals| {
-                        internals.active.fetch_sub(1, Ordering::SeqCst);
-                    })
-                    .unwrap_or(());
-            })?;
-
-        Ok(Connection {
-            conn: Some(IdleConn {
-                conn,
-                last_visited: Instant::now(),
-                created: Instant::now(),
-            }),
-            pool: self.clone(),
-        })
     }
 
     fn put(&self, mut conn: IdleConn<M::Connection>) -> io::Result<()> {
@@ -519,21 +596,36 @@ impl<M: ManageConnection> Pool<M> {
         // Check if connection should be dropped due to expiration
         if self.exceed_idle_timeout(&conn) || self.exceed_max_lifetime(&conn) {
             // Connection is expired, decrease active count and drop it
-            self.inner
-                .intervals
-                .lock()
-                .map(|internals| {
+            // Note: This was an active connection that's being returned, so we decrease active count
+            match self.inner.intervals.lock() {
+                Ok(internals) => {
                     internals.active.fetch_sub(1, Ordering::SeqCst);
-                })
-                .unwrap_or(());
+                    eprintln!("Debug: Dropped expired connection, active count decreased");
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Error: Failed to update active count after dropping expired connection: {}",
+                        e
+                    );
+                    return Err(std::io::Error::other(
+                        "Mutex poisoned during connection drop",
+                    ));
+                }
+            }
             return Ok(());
         }
 
         // Put connection back to pool
-        // When connection moves from "in use" to "idle", active count decreases
+        // Connection state transition: Active -> Idle
         self.with_internals(|internals| {
+            // Add to idle pool
             internals.conns.push_back(conn);
+            // Decrease active count as connection is no longer in use
             internals.active.fetch_sub(1, Ordering::SeqCst);
+        })
+        .map_err(|e| {
+            eprintln!("Error: Failed to return connection to pool: {}", e);
+            e
         })
     }
 }
