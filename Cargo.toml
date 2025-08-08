@@ -1,7 +1,23 @@
 [package]
-name = "myt"
+name = "mypool"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 tokio = { version = "1.0", features = ["full"] }
+
+[[example]]
+name = "db_example"
+path = "examples/db_example.rs"
+
+[[example]]
+name = "echo_example"
+path = "examples/echo_example.rs"
+
+[[example]]
+name = "simple_test"
+path = "examples/simple_test.rs"
+
+[[example]]
+name = "improved_test"
+path = "examples/improved_test.rs"

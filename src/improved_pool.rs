@@ -137,16 +137,3 @@ impl std::ops::DerefMut for PooledStream {
         self.stream.as_mut().unwrap()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_connection_pool() {
-        let _pool = ConnectionPool::new(2, "127.0.0.1:8080".to_string());
-
-        // 這裡可以添加測試邏輯
-        // 注意：需要一個實際的服務器來測試連接
-    }
-}
