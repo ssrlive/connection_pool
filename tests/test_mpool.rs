@@ -1,9 +1,5 @@
-use std::io;
-use std::time::Duration;
-
 use mypool::mpool::{ManageConnection, Pool};
-
-use async_trait::async_trait;
+use std::time::Duration;
 use tokio::time::sleep;
 
 #[derive(Debug, PartialEq)]
@@ -14,11 +10,11 @@ struct FakeManager {
     sleep: Option<Duration>,
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 impl ManageConnection for FakeManager {
     type Connection = FakeConnection;
 
-    async fn connect(&self) -> io::Result<Self::Connection> {
+    async fn connect(&self) -> std::io::Result<Self::Connection> {
         if let Some(d) = self.sleep {
             sleep(d).await;
         }
@@ -26,7 +22,7 @@ impl ManageConnection for FakeManager {
         Ok(FakeConnection)
     }
 
-    async fn check(&self, _conn: &mut Self::Connection) -> io::Result<()> {
+    async fn check(&self, _conn: &mut Self::Connection) -> std::io::Result<()> {
         Ok(())
     }
 }

@@ -1,6 +1,4 @@
-use async_trait::async_trait;
 use mypool::mpool::{ManageConnection, Pool};
-use std::io;
 use std::time::Duration;
 
 // 1. Define your connection type
@@ -24,11 +22,11 @@ impl MyConnectionManager {
 }
 
 // 3. Implement ManageConnection trait
-#[async_trait]
+#[async_trait::async_trait]
 impl ManageConnection for MyConnectionManager {
     type Connection = MyConnection;
 
-    async fn connect(&self) -> io::Result<Self::Connection> {
+    async fn connect(&self) -> std::io::Result<Self::Connection> {
         // Simulate connection creation process
         println!("Creating new connection...");
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -42,19 +40,22 @@ impl ManageConnection for MyConnectionManager {
         })
     }
 
-    async fn check(&self, conn: &mut Self::Connection) -> io::Result<()> {
+    async fn check(&self, conn: &mut Self::Connection) -> std::io::Result<()> {
         // Simulate health check
         if conn.is_connected {
             println!("Connection {} is healthy", conn.id);
             Ok(())
         } else {
-            Err(io::Error::new(io::ErrorKind::BrokenPipe, "Connection lost"))
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "Connection lost",
+            ))
         }
     }
 }
 
 #[tokio::main]
-async fn main() -> io::Result<()> {
+async fn main() -> std::io::Result<()> {
     println!("🚀 mpool Principle Demonstration");
 
     // 4. Create connection pool

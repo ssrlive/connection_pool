@@ -1,9 +1,7 @@
+use mypool::mpool::{ManageConnection, Pool};
 use std::io;
 use std::net::SocketAddr;
 use std::time::Duration;
-
-use async_trait::async_trait;
-use mypool::mpool::{ManageConnection, Pool};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -11,7 +9,7 @@ struct MyPool {
     addr: SocketAddr,
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 impl ManageConnection for MyPool {
     type Connection = TcpStream;
 

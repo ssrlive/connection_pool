@@ -2,10 +2,18 @@
 name = "mypool"
 version = "0.1.0"
 edition = "2024"
+authors = ["ssrlive <ssrlive@gmail.com>"]
+description = "A generic connection pool"
+homepage = "https://github.com/ssrlive/mypool"
+keywords = ["async", "await", "pool", "connection-pool", "tokio"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/ssrlive/mypool"
 
 [dependencies]
-tokio = { version = "1.47.1", features = ["full"] }
 async-trait = "0.1.88"
+log = "*"
+tokio = { version = "1.47.1", features = ["full"] }
 
 [[example]]
 name = "db_example"
