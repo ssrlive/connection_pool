@@ -26,7 +26,7 @@ pub async fn run_generic_pool_example() -> std::io::Result<()> {
 
             println!("Task {i} got connection");
 
-            conn.write(b"Hello, world!").await?;
+            _ = conn.write(b"Hello, world!").await?;
             conn.flush().await?;
             let mut buf = vec![0; 1024];
             conn.read_buf(&mut buf).await?;
@@ -53,7 +53,7 @@ pub async fn run_generic_pool_example() -> std::io::Result<()> {
 async fn main() -> std::io::Result<()> {
     println!("=== Running Echo Connection Pool Example ===");
     if let Err(e) = run_generic_pool_example().await {
-        println!("Echo connection pool example error: {}", e);
+        println!("Echo connection pool example error: {e}");
     }
     Ok(())
 }

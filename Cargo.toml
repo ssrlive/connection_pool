@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.47.1", features = ["full"] }
+async-trait = "0.1.88"
 
 [[example]]
 name = "db_example"
@@ -21,3 +22,11 @@ path = "examples/simple_test.rs"
 [[example]]
 name = "improved_test"
 path = "examples/improved_test.rs"
+
+[[example]]
+name = "mpool_explanation"
+path = "examples/mpool_explanation.rs"
+
+[[example]]
+name = "mpool_test"
+path = "examples/mpool_test.rs"

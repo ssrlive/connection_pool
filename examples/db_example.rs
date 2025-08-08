@@ -98,15 +98,15 @@ pub async fn example_db_pool() -> Result<(), Box<dyn std::error::Error>> {
             match pool_clone.get_connection().await {
                 Ok(conn) => {
                     println!(
-                        "Task {} successfully acquired database connection ID: {}",
-                        i, conn.id
+                        "Task {i} successfully acquired database connection ID: {}",
+                        conn.id
                     );
                     // Simulate using the connection
                     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-                    println!("Task {} completed, returning connection ID: {}", i, conn.id);
+                    println!("Task {i} completed, returning connection ID: {}", conn.id);
                 }
                 Err(e) => {
-                    println!("Task {} failed to acquire database connection: {}", i, e);
+                    println!("Task {i} failed to acquire database connection: {e}");
                 }
             }
         });
@@ -129,7 +129,7 @@ async fn main() -> std::io::Result<()> {
 
     println!("=== Running Generic Connection Pool Example ===");
     if let Err(e) = example_db_pool().await {
-        println!("Database connection pool example error: {}", e);
+        println!("Database connection pool example error: {e}");
     }
 
     Ok(())

@@ -20,7 +20,7 @@ async fn main() -> std::io::Result<()> {
         let handle = tokio::spawn(async move {
             let mut conn = pool.get_connection().await.unwrap();
 
-            conn.write(b"Hello, world!").await?;
+            _ = conn.write(b"Hello, world!").await?;
             conn.flush().await?;
             let mut buf = vec![0; 1024];
             conn.read_buf(&mut buf).await?;
