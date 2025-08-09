@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, ToSocketAddrs};
 use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, timeout};
@@ -393,13 +393,16 @@ impl<E: std::error::Error + 'static> std::error::Error for PoolError<E> {
 // Implement for TcpStream
 pub struct TcpConnectionCreator;
 
-impl ConnectionCreator<TcpStream, String> for TcpConnectionCreator {
+impl<A> ConnectionCreator<TcpStream, A> for TcpConnectionCreator
+where
+    A: ToSocketAddrs + Send + Sync + Clone + 'static,
+{
     type Error = std::io::Error;
     type Future = std::pin::Pin<Box<dyn Future<Output = Result<TcpStream, Self::Error>> + Send>>;
 
-    fn create_connection(&self, address: &String) -> Self::Future {
+    fn create_connection(&self, address: &A) -> Self::Future {
         let addr = address.clone();
-        Box::pin(async move { TcpStream::connect(&addr).await })
+        Box::pin(async move { TcpStream::connect(addr).await })
     }
 }
 
@@ -416,18 +419,21 @@ impl ConnectionValidator<TcpStream> for TcpConnectionValidator {
 }
 
 // Convenience type aliases
-pub type TcpConnectionPool = ConnectionPool<TcpStream, String, TcpConnectionCreator, TcpConnectionValidator>;
-pub type TcpPooledStream = PooledStream<TcpStream, String, TcpConnectionCreator, TcpConnectionValidator>;
+pub type TcpConnectionPool<A = std::net::SocketAddr> = ConnectionPool<TcpStream, A, TcpConnectionCreator, TcpConnectionValidator>;
+pub type TcpPooledStream<A = std::net::SocketAddr> = PooledStream<TcpStream, A, TcpConnectionCreator, TcpConnectionValidator>;
 
-impl TcpConnectionPool {
+impl<A> TcpConnectionPool<A>
+where
+    A: ToSocketAddrs + Send + Sync + Clone + 'static,
+{
     pub fn new_tcp(
         max_size: Option<usize>,
         max_idle_time: Option<Duration>,
         connection_timeout: Option<Duration>,
         cleanup_config: Option<CleanupConfig>,
-        address: String,
+        address: A,
     ) -> Arc<Self> {
-        log::info!("Creating TCP connection pool for address: {address}");
+        log::info!("Creating TCP connection pool");
         Self::new(
             max_size,
             max_idle_time,

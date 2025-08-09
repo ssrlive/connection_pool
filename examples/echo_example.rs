@@ -5,12 +5,12 @@
 //! echo-server -l 127.0.0.1:8080
 //! ```
 
+use connection_pool::TcpConnectionPool;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use connection_pool::{TcpConnectionPool, TcpPooledStream};
-
 pub async fn run_generic_pool_example() -> std::io::Result<()> {
-    let pool = TcpConnectionPool::new_tcp(Some(5), None, None, None, "127.0.0.1:8080".to_string());
+    let addr: std::net::SocketAddr = "127.0.0.1:8080".parse().unwrap();
+    let pool = TcpConnectionPool::new_tcp(Some(5), None, None, None, addr);
 
     // Simulate multiple concurrent tasks using the generic connection pool
     let mut handles = vec![];
@@ -20,7 +20,7 @@ pub async fn run_generic_pool_example() -> std::io::Result<()> {
         let handle = tokio::spawn(async move {
             println!("Task {i} trying to get connection");
 
-            let mut conn: TcpPooledStream = pool
+            let mut conn = pool
                 .get_connection()
                 .await
                 .map_err(|e| std::io::Error::other(format!("Task {i} failed to get connection: {e}")))?;
