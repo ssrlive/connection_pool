@@ -1,4 +1,4 @@
-use mypool::mpool::{ManageConnection, Pool};
+use connection_pool::mpool::{ManageConnection, Pool};
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -71,16 +71,10 @@ async fn test_get_timeout() {
         sleep: Some(Duration::from_millis(200)),
     };
 
-    let pool = Pool::builder()
-        .connection_timeout(Some(Duration::from_millis(100)))
-        .build(manager);
+    let pool = Pool::builder().connection_timeout(Some(Duration::from_millis(100))).build(manager);
 
     assert!(pool.get().await.is_err());
-    assert!(
-        pool.get_timeout(Some(Duration::from_millis(300)))
-            .await
-            .is_ok()
-    );
+    assert!(pool.get_timeout(Some(Duration::from_millis(300))).await.is_ok());
 }
 
 #[tokio::test]

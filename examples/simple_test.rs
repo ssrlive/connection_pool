@@ -5,7 +5,7 @@
 //! echo-server -l 127.0.0.1:8080
 //! ```
 
-use mypool::simple_pool::SharedConnectionPool;
+use connection_pool::simple_pool::SharedConnectionPool;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::main]

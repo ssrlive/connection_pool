@@ -7,7 +7,7 @@
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use mypool::generic_pool::TcpConnectionPool;
+use connection_pool::generic_pool::TcpConnectionPool;
 
 pub async fn run_generic_pool_example() -> std::io::Result<()> {
     let pool = TcpConnectionPool::new_tcp(Some(5), None, None, "127.0.0.1:8080".to_string());
@@ -20,9 +20,10 @@ pub async fn run_generic_pool_example() -> std::io::Result<()> {
         let handle = tokio::spawn(async move {
             println!("Task {i} trying to get connection");
 
-            let mut conn = pool.get_connection().await.map_err(|e| {
-                std::io::Error::other(format!("Task {i} failed to get connection: {e}"))
-            })?;
+            let mut conn = pool
+                .get_connection()
+                .await
+                .map_err(|e| std::io::Error::other(format!("Task {i} failed to get connection: {e}")))?;
 
             println!("Task {i} got connection");
 

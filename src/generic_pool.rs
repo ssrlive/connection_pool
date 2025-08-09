@@ -85,16 +85,9 @@ where
         })
     }
 
-    pub async fn get_connection(
-        self: Arc<Self>,
-    ) -> Result<PooledStream<T, P, C, V>, PoolError<C::Error>> {
+    pub async fn get_connection(self: Arc<Self>) -> Result<PooledStream<T, P, C, V>, PoolError<C::Error>> {
         // Use semaphore to limit concurrent connections
-        let permit = self
-            .semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| PoolError::PoolClosed)?;
+        let permit = self.semaphore.clone().acquire_owned().await.map_err(|_| PoolError::PoolClosed)?;
 
         {
             // Try to get an existing connection from the pool
@@ -105,11 +98,7 @@ where
             self.cleanup_expired_connections(&mut connections).await;
 
             if let Some(pooled_conn) = connections.pop_front() {
-                if self
-                    .connection_validator
-                    .is_valid(&pooled_conn.connection)
-                    .await
-                {
+                if self.connection_validator.is_valid(&pooled_conn.connection).await {
                     return Ok(PooledStream {
                         connection: Some(pooled_conn.connection),
                         pool: self.clone(),
@@ -122,8 +111,7 @@ where
         // Create new connection
         match timeout(
             self.connection_timeout,
-            self.connection_creator
-                .create_connection(&self.connection_params),
+            self.connection_creator.create_connection(&self.connection_params),
         )
         .await
         {
@@ -283,10 +271,8 @@ impl ConnectionValidator<TcpStream> for TcpConnectionValidator {
 }
 
 // Convenience type aliases
-pub type TcpConnectionPool =
-    ConnectionPool<TcpStream, String, TcpConnectionCreator, TcpConnectionValidator>;
-pub type TcpPooledStream =
-    PooledStream<TcpStream, String, TcpConnectionCreator, TcpConnectionValidator>;
+pub type TcpConnectionPool = ConnectionPool<TcpStream, String, TcpConnectionCreator, TcpConnectionValidator>;
+pub type TcpPooledStream = PooledStream<TcpStream, String, TcpConnectionCreator, TcpConnectionValidator>;
 
 impl TcpConnectionPool {
     pub fn new_tcp(

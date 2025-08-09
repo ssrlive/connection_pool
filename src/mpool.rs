@@ -290,9 +290,7 @@ impl<M: ManageConnection> Pool<M> {
     /// Returns the total number of connections (active + idle).
     /// This method is primarily intended for testing and monitoring.
     pub fn total_count(&self) -> std::io::Result<u32> {
-        self.with_internals(|internals| {
-            internals.active.load(Ordering::SeqCst) + internals.conns.len() as u32
-        })
+        self.with_internals(|internals| internals.active.load(Ordering::SeqCst) + internals.conns.len() as u32)
     }
 
     /// Check if the pool is at maximum capacity.
@@ -420,9 +418,7 @@ impl<M: ManageConnection> Pool<M> {
                     }
                     Err(e) => {
                         consecutive_errors += 1;
-                        log::warn!(
-                            "Failed to get idle count (attempt {consecutive_errors}/{MAX_CONSECUTIVE_ERRORS}): {e}",
-                        );
+                        log::warn!("Failed to get idle count (attempt {consecutive_errors}/{MAX_CONSECUTIVE_ERRORS}): {e}",);
 
                         if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
                             log::error!("Too many consecutive failures, attempting pool recovery");
@@ -453,8 +449,7 @@ impl<M: ManageConnection> Pool<M> {
 
                         match conn_result {
                             Ok(Some(mut conn)) => {
-                                let should_drop = self.exceed_idle_timeout(&conn)
-                                    || self.exceed_max_lifetime(&conn);
+                                let should_drop = self.exceed_idle_timeout(&conn) || self.exceed_max_lifetime(&conn);
 
                                 if should_drop {
                                     // Connection expired, just drop it
@@ -467,9 +462,7 @@ impl<M: ManageConnection> Pool<M> {
                                     Ok(_) => {
                                         // Connection is healthy, put it back
                                         if let Err(e) = self.push_back(conn) {
-                                            log::warn!(
-                                                "Failed to return healthy connection to pool: {e}"
-                                            );
+                                            log::warn!("Failed to return healthy connection to pool: {e}");
                                         }
                                     }
                                     Err(check_err) => {
@@ -481,9 +474,7 @@ impl<M: ManageConnection> Pool<M> {
                             }
                             Ok(None) => break, // No more connections in this batch
                             Err(e) => {
-                                log::warn!(
-                                    "Error accessing connection pool during health check: {e}",
-                                );
+                                log::warn!("Error accessing connection pool during health check: {e}",);
                                 break;
                             }
                         }
@@ -501,10 +492,7 @@ impl<M: ManageConnection> Pool<M> {
     /// Retrieves a connection from the pool.
     ///
     /// Waits for at most the connection timeout before returning an error.
-    pub async fn get_timeout(
-        &self,
-        connection_timeout: Option<Duration>,
-    ) -> std::io::Result<M::Connection> {
+    pub async fn get_timeout(&self, connection_timeout: Option<Duration>) -> std::io::Result<M::Connection> {
         if let Some(connection_timeout) = connection_timeout {
             let conn = match timeout(connection_timeout, self.inner.manager.connect()).await {
                 Ok(s) => match s {
@@ -543,9 +531,7 @@ impl<M: ManageConnection> Pool<M> {
             let total_connections = current_active + current_idle;
 
             if max_size > 0 && total_connections >= max_size {
-                return Err(std::io::Error::other(
-                    "Connection pool is at maximum capacity",
-                ));
+                return Err(std::io::Error::other("Connection pool is at maximum capacity"));
             }
 
             // Reserve a slot by incrementing active count
@@ -563,15 +549,12 @@ impl<M: ManageConnection> Pool<M> {
             }
             None => {
                 // Create new connection
-                let conn = self
-                    .get_timeout(self.inner.connection_timeout)
-                    .await
-                    .inspect_err(|_e| {
-                        // If creation fails, decrease active count
-                        if let Ok(internals) = self.inner.intervals.lock() {
-                            internals.active.fetch_sub(1, Ordering::SeqCst);
-                        }
-                    })?;
+                let conn = self.get_timeout(self.inner.connection_timeout).await.inspect_err(|_e| {
+                    // If creation fails, decrease active count
+                    if let Ok(internals) = self.inner.intervals.lock() {
+                        internals.active.fetch_sub(1, Ordering::SeqCst);
+                    }
+                })?;
 
                 Ok(Connection {
                     conn: Some(IdleConn {
@@ -598,12 +581,8 @@ impl<M: ManageConnection> Pool<M> {
                     log::debug!("Dropped expired connection, active count decreased");
                 }
                 Err(e) => {
-                    log::error!(
-                        "Failed to update active count after dropping expired connection: {e}"
-                    );
-                    return Err(std::io::Error::other(
-                        "Mutex poisoned during connection drop",
-                    ));
+                    log::error!("Failed to update active count after dropping expired connection: {e}");
+                    return Err(std::io::Error::other("Mutex poisoned during connection drop"));
                 }
             }
             return Ok(());

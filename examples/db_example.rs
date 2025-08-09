@@ -1,4 +1,4 @@
-use mypool::generic_pool::{ConnectionCreator, ConnectionPool, ConnectionValidator};
+use connection_pool::generic_pool::{ConnectionCreator, ConnectionPool, ConnectionValidator};
 use std::future::Future;
 
 // Custom connection type - simulating database connection
@@ -10,10 +10,7 @@ pub struct DatabaseConnection {
 
 impl DatabaseConnection {
     fn new(id: u32) -> Self {
-        Self {
-            id,
-            connected: true,
-        }
+        Self { id, connected: true }
     }
 
     fn is_alive(&self) -> bool {
@@ -34,8 +31,7 @@ pub struct DbConnectionCreator;
 
 impl ConnectionCreator<DatabaseConnection, DbConnectionParams> for DbConnectionCreator {
     type Error = String;
-    type Future =
-        std::pin::Pin<Box<dyn Future<Output = Result<DatabaseConnection, Self::Error>> + Send>>;
+    type Future = std::pin::Pin<Box<dyn Future<Output = Result<DatabaseConnection, Self::Error>> + Send>>;
 
     fn create_connection(&self, params: &DbConnectionParams) -> Self::Future {
         let _params = params.clone();
@@ -63,12 +59,7 @@ impl ConnectionValidator<DatabaseConnection> for DbConnectionValidator {
 }
 
 // Database connection pool type alias
-pub type DbConnectionPool = ConnectionPool<
-    DatabaseConnection,
-    DbConnectionParams,
-    DbConnectionCreator,
-    DbConnectionValidator,
->;
+pub type DbConnectionPool = ConnectionPool<DatabaseConnection, DbConnectionParams, DbConnectionCreator, DbConnectionValidator>;
 
 pub async fn example_db_pool() -> Result<(), Box<dyn std::error::Error>> {
     let params = DbConnectionParams {
@@ -99,10 +90,7 @@ pub async fn example_db_pool() -> Result<(), Box<dyn std::error::Error>> {
         let handle = tokio::spawn(async move {
             match pool_clone.get_connection().await {
                 Ok(conn) => {
-                    println!(
-                        "Task {i} successfully acquired database connection ID: {}",
-                        conn.id
-                    );
+                    println!("Task {i} successfully acquired database connection ID: {}", conn.id);
                     // Simulate using the connection
                     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
                     println!("Task {i} completed, returning connection ID: {}", conn.id);

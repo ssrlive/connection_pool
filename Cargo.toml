@@ -1,14 +1,14 @@
 [package]
-name = "mypool"
+name = "connection_pool"
 version = "0.1.0"
 edition = "2024"
 authors = ["ssrlive <ssrlive@gmail.com>"]
 description = "A generic connection pool"
-homepage = "https://github.com/ssrlive/mypool"
+homepage = "https://github.com/ssrlive/connection_pool"
 keywords = ["async", "await", "pool", "connection-pool", "tokio"]
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/ssrlive/mypool"
+repository = "https://github.com/ssrlive/connection_pool"
 
 [dependencies]
 async-trait = "0.1.88"

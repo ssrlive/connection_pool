@@ -1,4 +1,4 @@
-use mypool::mpool::{ManageConnection, Pool};
+use connection_pool::mpool::{ManageConnection, Pool};
 use std::io;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -20,17 +20,13 @@ impl ManageConnection for MyPool {
     async fn check(&self, conn: &mut Self::Connection) -> io::Result<()> {
         // Perform a simple health check by trying to write/read
         match tokio::time::timeout(Duration::from_secs(1), async {
-            conn.ready(tokio::io::Interest::READABLE | tokio::io::Interest::WRITABLE)
-                .await
+            conn.ready(tokio::io::Interest::READABLE | tokio::io::Interest::WRITABLE).await
         })
         .await
         {
             Ok(Ok(_)) => Ok(()),
             Ok(Err(e)) => Err(e),
-            Err(_) => Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "Health check timeout",
-            )),
+            Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "Health check timeout")),
         }
     }
 }
@@ -136,14 +132,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let elapsed = start_time.elapsed();
-    println!(
-        "   ⏱️  Completed 100 operations in {:.2}s",
-        elapsed.as_secs_f64()
-    );
-    println!(
-        "   📊 Average: {:.2} ops/sec",
-        100.0 / elapsed.as_secs_f64()
-    );
+    println!("   ⏱️  Completed 100 operations in {:.2}s", elapsed.as_secs_f64());
+    println!("   📊 Average: {:.2} ops/sec", 100.0 / elapsed.as_secs_f64());
     println!("\n📊 Final pool statistics:");
     let stats = pool.stats()?;
     println!("   Active connections: {}", stats.active);
@@ -192,10 +182,7 @@ async fn perform_echo_test(pool: &Pool<MyPool>, task_id: usize) -> io::Result<St
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Read timeout"))??;
 
     if bytes_read == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            "Connection closed",
-        ));
+        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Connection closed"));
     }
 
     let response = String::from_utf8_lossy(&buffer[..bytes_read]);
