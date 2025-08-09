@@ -73,6 +73,11 @@ where
         connection_validator: V,
     ) -> Arc<Self> {
         let max_size = max_size.unwrap_or(DEFAULT_MAX_SIZE);
+        let max_idle_time = max_idle_time.unwrap_or(DEFAULT_IDLE_TIMEOUT);
+        let connection_timeout = connection_timeout.unwrap_or(DEFAULT_CONNECTION_TIMEOUT);
+        log::info!(
+            "Creating connection pool with max_size: {max_size}, idle_timeout: {max_idle_time:?}, connection_timeout: {connection_timeout:?}",
+        );
         Arc::new(ConnectionPool {
             connections: Arc::new(Mutex::new(VecDeque::new())),
             semaphore: Arc::new(Semaphore::new(max_size)),
@@ -80,34 +85,47 @@ where
             connection_params,
             connection_creator,
             connection_validator,
-            max_idle_time: max_idle_time.unwrap_or(DEFAULT_IDLE_TIMEOUT),
-            connection_timeout: connection_timeout.unwrap_or(DEFAULT_CONNECTION_TIMEOUT),
+            max_idle_time,
+            connection_timeout,
         })
     }
 
     pub async fn get_connection(self: Arc<Self>) -> Result<PooledStream<T, P, C, V>, PoolError<C::Error>> {
+        log::debug!("Attempting to get connection from pool");
+
         // Use semaphore to limit concurrent connections
         let permit = self.semaphore.clone().acquire_owned().await.map_err(|_| PoolError::PoolClosed)?;
 
         {
             // Try to get an existing connection from the pool
             let mut connections = self.connections.lock().await;
+            let initial_count = connections.len();
 
             // There may be performance issues here, but let's just leave it at that.
             // How big a connection pool will you maintain?
             self.cleanup_expired_connections(&mut connections).await;
 
+            let expired_count = initial_count - connections.len();
+            if expired_count > 0 {
+                log::debug!("Cleaned up {expired_count} expired connections");
+            }
+
             if let Some(pooled_conn) = connections.pop_front() {
+                log::trace!("Found existing connection in pool, validating...");
                 if self.connection_validator.is_valid(&pooled_conn.connection).await {
+                    log::debug!("Reusing existing connection from pool (remaining: {})", connections.len());
                     return Ok(PooledStream {
                         connection: Some(pooled_conn.connection),
                         pool: self.clone(),
                         _permit: permit,
                     });
+                } else {
+                    log::warn!("Connection validation failed, discarding invalid connection");
                 }
             }
         }
 
+        log::trace!("No valid connection available, creating new connection...");
         // Create new connection
         match timeout(
             self.connection_timeout,
@@ -115,13 +133,22 @@ where
         )
         .await
         {
-            Ok(Ok(connection)) => Ok(PooledStream {
-                connection: Some(connection),
-                pool: self.clone(),
-                _permit: permit,
-            }),
-            Ok(Err(e)) => Err(PoolError::Creation(e)),
-            Err(_) => Err(PoolError::Timeout),
+            Ok(Ok(connection)) => {
+                log::info!("Successfully created new connection");
+                Ok(PooledStream {
+                    connection: Some(connection),
+                    pool: self.clone(),
+                    _permit: permit,
+                })
+            }
+            Ok(Err(e)) => {
+                log::error!("Failed to create new connection");
+                Err(PoolError::Creation(e))
+            }
+            Err(_) => {
+                log::warn!("Connection creation timed out after {:?}", self.connection_timeout);
+                Err(PoolError::Timeout)
+            }
         }
     }
 
@@ -139,13 +166,16 @@ where
     C: Send + Sync + 'static,
     V: Send + Sync + 'static,
 {
-    pub async fn return_connection(&self, connection: T) {
+    async fn return_connection(&self, connection: T) {
         let mut connections = self.connections.lock().await;
         if connections.len() < self.max_size {
             connections.push_back(PooledConnection {
                 connection,
                 created_at: Instant::now(),
             });
+            log::trace!("Connection returned to pool (pool size: {})", connections.len());
+        } else {
+            log::trace!("Pool is full, dropping connection (max_size: {})", self.max_size);
         }
         // If the pool is full, the connection will be dropped (automatically closed)
     }
@@ -162,7 +192,10 @@ where
         if let Some(connection) = self.connection.take() {
             let pool = self.pool.clone();
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                log::trace!("Returning connection to pool on drop");
                 tokio::task::block_in_place(|| handle.block_on(pool.return_connection(connection)));
+            } else {
+                log::warn!("No tokio runtime available, connection will be dropped");
             }
         }
     }

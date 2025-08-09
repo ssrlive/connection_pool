@@ -52,6 +52,7 @@ pub async fn run_generic_pool_example() -> std::io::Result<()> {
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    env_logger::Builder::from_default_env().filter_level(log::LevelFilter::Trace).init();
     println!("=== Running Echo Connection Pool Example ===");
     if let Err(e) = run_generic_pool_example().await {
         println!("Echo connection pool example error: {e}");
