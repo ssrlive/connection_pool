@@ -35,7 +35,7 @@ async fn test_to_socket_addrs_support() -> Result<(), Box<dyn std::error::Error>
     println!("\n3. Using SocketAddr:");
     let addr: SocketAddr = "127.0.0.1:8082".parse()?;
     let _pool3 = TcpConnectionPool::new_tcp(Some(5), Some(Duration::from_secs(300)), Some(Duration::from_secs(10)), None, addr);
-    println!("Created pool with SocketAddr: {}", addr);
+    println!("Created pool with SocketAddr: {addr}");
 
     // Test 4: Using tuple (Ipv4Addr, u16)
     println!("\n4. Using (Ipv4Addr, u16) tuple:");

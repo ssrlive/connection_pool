@@ -26,7 +26,6 @@ Add this to your `Cargo.toml`:
 [dependencies]
 connection-pool = "0.1"
 tokio = { version = "1.0", features = ["full"] }
-log = "0.4"
 ```
 
 ### Simple TCP Connection Pool
@@ -280,14 +279,6 @@ cargo run --example db_example
 cargo run --example background_cleanup_example
 ```
 
-## 📈 Performance
-
-The background cleanup mechanism provides significant performance improvements:
-
-- **Before**: Every `get_connection()` call scanned for expired connections
-- **After**: Background task handles cleanup, `get_connection()` is much faster
-- **Result**: 50-80% reduction in connection acquisition latency under load
-
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
@@ -300,4 +291,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - [Documentation](https://docs.rs/connection-pool)
 - [Crates.io](https://crates.io/crates/connection-pool)
-- [Repository](https://github.com/yourusername/connection-pool)
+- [Repository](https://github.com/ssrlive/connection-pool)

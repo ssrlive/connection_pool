@@ -159,10 +159,7 @@ where
         let cleanup_config = cleanup_config.unwrap_or_default();
 
         log::info!(
-            "Creating connection pool with max_size: {}, idle_timeout: {:?}, connection_timeout: {:?}, cleanup_enabled: {}",
-            max_size,
-            max_idle_time,
-            connection_timeout,
+            "Creating connection pool with max_size: {max_size}, idle_timeout: {max_idle_time:?}, connection_timeout: {connection_timeout:?}, cleanup_enabled: {}",
             cleanup_config.enabled
         );
 
