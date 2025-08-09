@@ -151,29 +151,6 @@ where
     }
 }
 
-// To maintain compatibility with TcpStream, we provide specific implementations
-impl<P, C, V> AsRef<TcpStream> for PooledStream<TcpStream, P, C, V>
-where
-    P: Send + Sync + Clone + 'static,
-    C: Send + Sync + 'static,
-    V: Send + Sync + 'static,
-{
-    fn as_ref(&self) -> &TcpStream {
-        self.connection.as_ref().unwrap()
-    }
-}
-
-impl<P, C, V> AsMut<TcpStream> for PooledStream<TcpStream, P, C, V>
-where
-    P: Send + Sync + Clone + 'static,
-    C: Send + Sync + 'static,
-    V: Send + Sync + 'static,
-{
-    fn as_mut(&mut self) -> &mut TcpStream {
-        self.connection.as_mut().unwrap()
-    }
-}
-
 impl<T, P, C, V> Drop for PooledStream<T, P, C, V>
 where
     T: Send + 'static,
@@ -188,6 +165,31 @@ where
                 tokio::task::block_in_place(|| handle.block_on(pool.return_connection(connection)));
             }
         }
+    }
+}
+
+// Generic implementations for AsRef and AsMut
+impl<T, P, C, V> AsRef<T> for PooledStream<T, P, C, V>
+where
+    T: Send + 'static,
+    P: Send + Sync + Clone + 'static,
+    C: Send + Sync + 'static,
+    V: Send + Sync + 'static,
+{
+    fn as_ref(&self) -> &T {
+        self.connection.as_ref().unwrap()
+    }
+}
+
+impl<T, P, C, V> AsMut<T> for PooledStream<T, P, C, V>
+where
+    T: Send + 'static,
+    P: Send + Sync + Clone + 'static,
+    C: Send + Sync + 'static,
+    V: Send + Sync + 'static,
+{
+    fn as_mut(&mut self) -> &mut T {
+        self.connection.as_mut().unwrap()
     }
 }
 
