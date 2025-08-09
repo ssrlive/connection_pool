@@ -1,4 +1,4 @@
-use connection_pool::generic_pool::{ConnectionCreator, ConnectionPool, ConnectionValidator};
+use connection_pool::{ConnectionCreator, ConnectionPool, ConnectionValidator};
 use std::future::Future;
 
 // Custom connection type - simulating database connection

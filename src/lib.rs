@@ -1,4 +1,3 @@
-pub mod generic_pool;
-pub mod improved_pool;
-pub mod mpool;
-pub mod simple_pool;
+mod generic_pool;
+
+pub use generic_pool::{CleanupConfig, ConnectionCreator, ConnectionPool, ConnectionValidator, TcpConnectionPool, TcpPooledStream};

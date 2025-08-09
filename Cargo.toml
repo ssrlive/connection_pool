@@ -4,17 +4,18 @@ version = "0.1.0"
 edition = "2024"
 authors = ["ssrlive <ssrlive@gmail.com>"]
 description = "A generic connection pool"
-homepage = "https://github.com/ssrlive/connection_pool"
+homepage = "https://crates.io/crates/connection_pool"
 keywords = ["async", "await", "pool", "connection-pool", "tokio"]
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/ssrlive/connection_pool"
 
 [dependencies]
-async-trait = "0.1.88"
-env_logger = "0.11.8"
 log = "0.4.27"
 tokio = { version = "1.47.1", features = ["full"] }
+
+[dev-dependencies]
+env_logger = "0.11.8"
 
 [[example]]
 name = "db_example"
@@ -25,17 +26,5 @@ name = "echo_example"
 path = "examples/echo_example.rs"
 
 [[example]]
-name = "simple_test"
-path = "examples/simple_test.rs"
-
-[[example]]
-name = "improved_test"
-path = "examples/improved_test.rs"
-
-[[example]]
-name = "mpool_explanation"
-path = "examples/mpool_explanation.rs"
-
-[[example]]
-name = "mpool_test"
-path = "examples/mpool_test.rs"
+name = "background_cleanup_example"
+path = "examples/background_cleanup_example.rs"

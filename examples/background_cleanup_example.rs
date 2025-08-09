@@ -1,4 +1,4 @@
-use connection_pool::generic_pool::{CleanupConfig, TcpConnectionPool};
+use connection_pool::{CleanupConfig, TcpConnectionPool};
 use std::time::Duration;
 use tokio::time::sleep;
 
