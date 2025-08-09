@@ -6,6 +6,10 @@ use tokio::net::TcpStream;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time::timeout;
 
+pub const DEFAULT_MAX_SIZE: usize = 10;
+pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60); // 5 minutes
+pub const DEFAULT_CONNECTION_TIMEOUT: Duration = Duration::from_secs(10); // 10 seconds
+
 /// Connection creator trait
 pub trait ConnectionCreator<T, P> {
     type Error;
@@ -33,6 +37,7 @@ where
     connection_creator: C,
     connection_validator: V,
     max_idle_time: Duration,
+    connection_timeout: Duration,
 }
 
 struct PooledConnection<T> {
@@ -60,11 +65,14 @@ where
     P: Send + Sync + Clone + 'static,
 {
     pub fn new(
-        max_size: usize,
+        max_size: Option<usize>,
+        max_idle_time: Option<Duration>,
+        connection_timeout: Option<Duration>,
         connection_params: P,
         connection_creator: C,
         connection_validator: V,
     ) -> Arc<Self> {
+        let max_size = max_size.unwrap_or(DEFAULT_MAX_SIZE);
         Arc::new(ConnectionPool {
             connections: Arc::new(Mutex::new(VecDeque::new())),
             semaphore: Arc::new(Semaphore::new(max_size)),
@@ -72,7 +80,8 @@ where
             connection_params,
             connection_creator,
             connection_validator,
-            max_idle_time: Duration::from_secs(300), // 5 minutes idle timeout
+            max_idle_time: max_idle_time.unwrap_or(DEFAULT_IDLE_TIMEOUT),
+            connection_timeout: connection_timeout.unwrap_or(DEFAULT_CONNECTION_TIMEOUT),
         })
     }
 
@@ -91,6 +100,8 @@ where
             // Try to get an existing connection from the pool
             let mut connections = self.connections.lock().await;
 
+            // There may be performance issues here, but let's just leave it at that.
+            // How big a connection pool will you maintain?
             self.cleanup_expired_connections(&mut connections).await;
 
             if let Some(pooled_conn) = connections.pop_front() {
@@ -110,7 +121,7 @@ where
 
         // Create new connection
         match timeout(
-            Duration::from_secs(10),
+            self.connection_timeout,
             self.connection_creator
                 .create_connection(&self.connection_params),
         )
@@ -185,9 +196,9 @@ where
     fn drop(&mut self) {
         if let Some(connection) = self.connection.take() {
             let pool = self.pool.clone();
-            tokio::spawn(async move {
-                pool.return_connection(connection).await;
-            });
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                tokio::task::block_in_place(|| handle.block_on(pool.return_connection(connection)));
+            }
         }
     }
 }
@@ -278,9 +289,16 @@ pub type TcpPooledStream =
     PooledStream<TcpStream, String, TcpConnectionCreator, TcpConnectionValidator>;
 
 impl TcpConnectionPool {
-    pub fn new_tcp(max_size: usize, address: String) -> Arc<Self> {
+    pub fn new_tcp(
+        max_size: Option<usize>,
+        max_idle_time: Option<Duration>,
+        connection_timeout: Option<Duration>,
+        address: String,
+    ) -> Arc<Self> {
         Self::new(
             max_size,
+            max_idle_time,
+            connection_timeout,
             address,
             TcpConnectionCreator,
             TcpConnectionValidator,
