@@ -51,7 +51,7 @@ impl CleanupTaskController {
 
         let handle = tokio::spawn(async move {
             let mut interval_timer = interval(cleanup_interval);
-            log::info!("Background cleanup task started with interval: {:?}", cleanup_interval);
+            log::info!("Background cleanup task started with interval: {cleanup_interval:?}");
 
             loop {
                 interval_timer.tick().await;
@@ -64,7 +64,7 @@ impl CleanupTaskController {
 
                 let removed_count = initial_count - connections.len();
                 if removed_count > 0 {
-                    log::debug!("Background cleanup removed {} expired connections", removed_count);
+                    log::debug!("Background cleanup removed {removed_count} expired connections");
                 }
 
                 // Release the lock
@@ -210,7 +210,7 @@ where
                 // Quick check if connection is not obviously expired
                 let age = Instant::now().duration_since(pooled_conn.created_at);
                 if age >= self.max_idle_time {
-                    log::debug!("Connection expired (age: {:?}), discarding", age);
+                    log::debug!("Connection expired (age: {age:?}), discarding");
                 } else if self.connection_validator.is_valid(&pooled_conn.connection).await {
                     log::debug!("Reusing existing connection from pool (remaining: {})", connections.len());
                     return Ok(PooledStream {
@@ -427,7 +427,7 @@ impl TcpConnectionPool {
         cleanup_config: Option<CleanupConfig>,
         address: String,
     ) -> Arc<Self> {
-        log::info!("Creating TCP connection pool for address: {}", address);
+        log::info!("Creating TCP connection pool for address: {address}");
         Self::new(
             max_size,
             max_idle_time,

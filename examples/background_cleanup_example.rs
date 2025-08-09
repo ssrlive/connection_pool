@@ -37,14 +37,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for i in 1..=5 {
         match pool.clone().get_connection().await {
             Ok(conn) => {
-                println!("Connection {} created successfully", i);
+                println!("Connection {i} created successfully");
                 // Hold the connection briefly, then drop it
                 sleep(Duration::from_millis(100)).await;
                 drop(conn);
-                println!("Connection {} dropped", i);
+                println!("Connection {i} dropped");
             }
             Err(e) => {
-                println!("Connection {} failed: {}", i, e);
+                println!("Connection {i} failed: {e}");
             }
         }
         sleep(Duration::from_millis(500)).await;

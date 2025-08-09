@@ -1,14 +1,16 @@
 [package]
-name = "connection_pool"
+name = "connection-pool"
 version = "0.1.0"
 edition = "2024"
-authors = ["ssrlive <ssrlive@gmail.com>"]
-description = "A generic connection pool"
-homepage = "https://crates.io/crates/connection_pool"
-keywords = ["async", "await", "pool", "connection-pool", "tokio"]
+authors = ["ssrlive"]
+description = "A high-performance, generic async connection pool for Rust with background cleanup and comprehensive logging"
+homepage = "https://github.com/ssrlive/connection-pool"
+keywords = ["async", "connection-pool", "tokio", "generic", "background-cleanup"]
+categories = ["asynchronous", "network-programming", "database"]
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/ssrlive/connection_pool"
+repository = "https://github.com/ssrlive/connection-pool"
+documentation = "https://docs.rs/connection-pool"
 
 [dependencies]
 log = "0.4.27"
