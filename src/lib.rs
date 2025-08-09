@@ -1,7 +1,7 @@
 #![doc = include_str!("../README.md")]
 
-mod generic_pool;
+mod connection_pool;
 
-pub use generic_pool::{
+pub use connection_pool::{
     CleanupConfig, ConnectionCreator, ConnectionPool, ConnectionValidator, PoolError, TcpConnectionPool, TcpPooledStream,
 };
