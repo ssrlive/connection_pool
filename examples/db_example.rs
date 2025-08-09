@@ -72,9 +72,10 @@ pub async fn example_db_pool() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create database connection pool
     let pool = DbConnectionPool::new(
-        Some(3), // Maximum number of connections
-        None,
-        None,
+        Some(3),               // Maximum number of connections
+        None,                  // Use default idle timeout
+        None,                  // Use default connection timeout
+        None,                  // Use default cleanup config (enabled with 30s interval)
         params,                // Connection parameters
         DbConnectionCreator,   // Connection creator
         DbConnectionValidator, // Connection validator

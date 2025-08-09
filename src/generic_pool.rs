@@ -4,11 +4,90 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, Semaphore};
-use tokio::time::timeout;
+use tokio::task::JoinHandle;
+use tokio::time::{interval, timeout};
 
 pub const DEFAULT_MAX_SIZE: usize = 10;
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60); // 5 minutes
 pub const DEFAULT_CONNECTION_TIMEOUT: Duration = Duration::from_secs(10); // 10 seconds
+pub const DEFAULT_CLEANUP_INTERVAL: Duration = Duration::from_secs(30); // 30 seconds
+
+/// Configuration for background cleanup task
+#[derive(Clone)]
+pub struct CleanupConfig {
+    pub interval: Duration,
+    pub enabled: bool,
+}
+
+impl Default for CleanupConfig {
+    fn default() -> Self {
+        Self {
+            interval: DEFAULT_CLEANUP_INTERVAL,
+            enabled: true,
+        }
+    }
+}
+
+/// Background cleanup task controller
+pub struct CleanupTaskController {
+    handle: Option<JoinHandle<()>>,
+}
+
+impl CleanupTaskController {
+    pub fn new() -> Self {
+        Self { handle: None }
+    }
+
+    pub fn start<T: Send + 'static>(
+        &mut self,
+        connections: Arc<Mutex<VecDeque<PooledConnection<T>>>>,
+        max_idle_time: Duration,
+        cleanup_interval: Duration,
+    ) {
+        if self.handle.is_some() {
+            log::warn!("Cleanup task is already running");
+            return;
+        }
+
+        let handle = tokio::spawn(async move {
+            let mut interval_timer = interval(cleanup_interval);
+            log::info!("Background cleanup task started with interval: {:?}", cleanup_interval);
+
+            loop {
+                interval_timer.tick().await;
+
+                let mut connections = connections.lock().await;
+                let initial_count = connections.len();
+                let now = Instant::now();
+
+                connections.retain(|conn| now.duration_since(conn.created_at) < max_idle_time);
+
+                let removed_count = initial_count - connections.len();
+                if removed_count > 0 {
+                    log::debug!("Background cleanup removed {} expired connections", removed_count);
+                }
+
+                // Release the lock
+                drop(connections);
+            }
+        });
+
+        self.handle = Some(handle);
+    }
+
+    pub fn stop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+            log::info!("Background cleanup task stopped");
+        }
+    }
+}
+
+impl Drop for CleanupTaskController {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
 
 /// Connection creator trait
 pub trait ConnectionCreator<T, P> {
@@ -38,11 +117,12 @@ where
     connection_validator: V,
     max_idle_time: Duration,
     connection_timeout: Duration,
+    cleanup_controller: Arc<Mutex<CleanupTaskController>>,
 }
 
-struct PooledConnection<T> {
-    connection: T,
-    created_at: Instant,
+pub struct PooledConnection<T> {
+    pub connection: T,
+    pub created_at: Instant,
 }
 
 pub struct PooledStream<T, P, C, V>
@@ -68,6 +148,7 @@ where
         max_size: Option<usize>,
         max_idle_time: Option<Duration>,
         connection_timeout: Option<Duration>,
+        cleanup_config: Option<CleanupConfig>,
         connection_params: P,
         connection_creator: C,
         connection_validator: V,
@@ -75,11 +156,21 @@ where
         let max_size = max_size.unwrap_or(DEFAULT_MAX_SIZE);
         let max_idle_time = max_idle_time.unwrap_or(DEFAULT_IDLE_TIMEOUT);
         let connection_timeout = connection_timeout.unwrap_or(DEFAULT_CONNECTION_TIMEOUT);
+        let cleanup_config = cleanup_config.unwrap_or_default();
+
         log::info!(
-            "Creating connection pool with max_size: {max_size}, idle_timeout: {max_idle_time:?}, connection_timeout: {connection_timeout:?}",
+            "Creating connection pool with max_size: {}, idle_timeout: {:?}, connection_timeout: {:?}, cleanup_enabled: {}",
+            max_size,
+            max_idle_time,
+            connection_timeout,
+            cleanup_config.enabled
         );
-        Arc::new(ConnectionPool {
-            connections: Arc::new(Mutex::new(VecDeque::new())),
+
+        let connections = Arc::new(Mutex::new(VecDeque::new()));
+        let cleanup_controller = Arc::new(Mutex::new(CleanupTaskController::new()));
+
+        let pool = Arc::new(ConnectionPool {
+            connections: connections.clone(),
             semaphore: Arc::new(Semaphore::new(max_size)),
             max_size,
             connection_params,
@@ -87,7 +178,18 @@ where
             connection_validator,
             max_idle_time,
             connection_timeout,
-        })
+            cleanup_controller: cleanup_controller.clone(),
+        });
+
+        // Start background cleanup task if enabled
+        if cleanup_config.enabled {
+            tokio::spawn(async move {
+                let mut controller = cleanup_controller.lock().await;
+                controller.start(connections, max_idle_time, cleanup_config.interval);
+            });
+        }
+
+        pool
     }
 
     pub async fn get_connection(self: Arc<Self>) -> Result<PooledStream<T, P, C, V>, PoolError<C::Error>> {
@@ -99,20 +201,17 @@ where
         {
             // Try to get an existing connection from the pool
             let mut connections = self.connections.lock().await;
-            let initial_count = connections.len();
 
-            // There may be performance issues here, but let's just leave it at that.
-            // How big a connection pool will you maintain?
-            self.cleanup_expired_connections(&mut connections).await;
-
-            let expired_count = initial_count - connections.len();
-            if expired_count > 0 {
-                log::debug!("Cleaned up {expired_count} expired connections");
-            }
-
+            // With background cleanup enabled, we can skip the inline cleanup
+            // for better performance, but still do a quick validation
             if let Some(pooled_conn) = connections.pop_front() {
                 log::trace!("Found existing connection in pool, validating...");
-                if self.connection_validator.is_valid(&pooled_conn.connection).await {
+
+                // Quick check if connection is not obviously expired
+                let age = Instant::now().duration_since(pooled_conn.created_at);
+                if age >= self.max_idle_time {
+                    log::debug!("Connection expired (age: {:?}), discarding", age);
+                } else if self.connection_validator.is_valid(&pooled_conn.connection).await {
                     log::debug!("Reusing existing connection from pool (remaining: {})", connections.len());
                     return Ok(PooledStream {
                         connection: Some(pooled_conn.connection),
@@ -152,9 +251,20 @@ where
         }
     }
 
-    async fn cleanup_expired_connections(&self, connections: &mut VecDeque<PooledConnection<T>>) {
-        let now = Instant::now();
-        connections.retain(|conn| now.duration_since(conn.created_at) < self.max_idle_time);
+    /// Stop the background cleanup task
+    pub async fn stop_cleanup_task(&self) {
+        let mut controller = self.cleanup_controller.lock().await;
+        controller.stop();
+    }
+
+    /// Restart the background cleanup task with new configuration
+    pub async fn restart_cleanup_task(&self, cleanup_config: CleanupConfig) {
+        let mut controller = self.cleanup_controller.lock().await;
+        controller.stop();
+
+        if cleanup_config.enabled {
+            controller.start(self.connections.clone(), self.max_idle_time, cleanup_config.interval);
+        }
     }
 }
 
@@ -314,12 +424,15 @@ impl TcpConnectionPool {
         max_size: Option<usize>,
         max_idle_time: Option<Duration>,
         connection_timeout: Option<Duration>,
+        cleanup_config: Option<CleanupConfig>,
         address: String,
     ) -> Arc<Self> {
+        log::info!("Creating TCP connection pool for address: {}", address);
         Self::new(
             max_size,
             max_idle_time,
             connection_timeout,
+            cleanup_config,
             address,
             TcpConnectionCreator,
             TcpConnectionValidator,

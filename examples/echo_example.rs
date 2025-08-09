@@ -10,7 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use connection_pool::generic_pool::TcpConnectionPool;
 
 pub async fn run_generic_pool_example() -> std::io::Result<()> {
-    let pool = TcpConnectionPool::new_tcp(Some(5), None, None, "127.0.0.1:8080".to_string());
+    let pool = TcpConnectionPool::new_tcp(Some(5), None, None, None, "127.0.0.1:8080".to_string());
 
     // Simulate multiple concurrent tasks using the generic connection pool
     let mut handles = vec![];
