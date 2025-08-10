@@ -1,4 +1,4 @@
-use crate::{CleanupConfig, ConnectionManager, ConnectionPool, connection_pool::PooledStream};
+use crate::{CleanupConfig, ConnectionManager, ConnectionPool, PooledStream};
 use std::{sync::Arc, time::Duration};
 use tokio::net::{TcpStream, ToSocketAddrs};
 
