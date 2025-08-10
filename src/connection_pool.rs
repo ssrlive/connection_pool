@@ -2,7 +2,6 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::net::{TcpStream, ToSocketAddrs};
 use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, timeout};
@@ -89,32 +88,26 @@ impl Drop for CleanupTaskController {
     }
 }
 
-/// Connection creator trait
-pub trait ConnectionCreator<T, P> {
-    type Error;
-    type Future: Future<Output = Result<T, Self::Error>>;
+pub trait ConnectionManager: Sync + Send {
+    type Connection: Send;
+    type Error: std::error::Error + Send;
+    type CreateFut: Future<Output = Result<Self::Connection, Self::Error>> + Send;
+    type ValidFut<'a>: Future<Output = bool> + Send
+    where
+        Self: 'a;
 
-    fn create_connection(&self, params: &P) -> Self::Future;
+    fn create_connection(&self) -> Self::CreateFut;
+    fn is_valid<'a>(&'a self, connection: &'a Self::Connection) -> Self::ValidFut<'a>;
 }
 
-/// Connection validator trait
-pub trait ConnectionValidator<T> {
-    fn is_valid(&self, connection: &T) -> impl Future<Output = bool> + Send;
-}
-
-pub struct ConnectionPool<T, P, C, V>
+pub struct ConnectionPool<M>
 where
-    T: Send + 'static,
-    P: Send + Sync + Clone + 'static,
-    C: Send + Sync + 'static,
-    V: Send + Sync + 'static,
+    M: ConnectionManager + Send + Sync + 'static,
 {
-    connections: Arc<Mutex<VecDeque<PooledConnection<T>>>>,
+    connections: Arc<Mutex<VecDeque<PooledConnection<M::Connection>>>>,
     semaphore: Arc<Semaphore>,
     max_size: usize,
-    connection_params: P,
-    connection_creator: C,
-    connection_validator: V,
+    manager: M,
     max_idle_time: Duration,
     connection_timeout: Duration,
     cleanup_controller: Arc<Mutex<CleanupTaskController>>,
@@ -125,33 +118,25 @@ pub struct PooledConnection<T> {
     pub created_at: Instant,
 }
 
-pub struct PooledStream<T, P, C, V>
+pub struct PooledStream<M>
 where
-    T: Send + 'static,
-    P: Send + Sync + Clone + 'static,
-    C: Send + Sync + 'static,
-    V: Send + Sync + 'static,
+    M: ConnectionManager + Send + Sync + 'static,
 {
-    connection: Option<T>,
-    pool: Arc<ConnectionPool<T, P, C, V>>,
+    connection: Option<M::Connection>,
+    pool: Arc<ConnectionPool<M>>,
     _permit: tokio::sync::OwnedSemaphorePermit,
 }
 
-impl<T, P, C, V> ConnectionPool<T, P, C, V>
+impl<M> ConnectionPool<M>
 where
-    C: ConnectionCreator<T, P> + Send + Sync + 'static,
-    V: ConnectionValidator<T> + Send + Sync + 'static,
-    T: Send + 'static,
-    P: Send + Sync + Clone + 'static,
+    M: ConnectionManager + Send + Sync + 'static,
 {
     pub fn new(
         max_size: Option<usize>,
         max_idle_time: Option<Duration>,
         connection_timeout: Option<Duration>,
         cleanup_config: Option<CleanupConfig>,
-        connection_params: P,
-        connection_creator: C,
-        connection_validator: V,
+        manager: M,
     ) -> Arc<Self> {
         let max_size = max_size.unwrap_or(DEFAULT_MAX_SIZE);
         let max_idle_time = max_idle_time.unwrap_or(DEFAULT_IDLE_TIMEOUT);
@@ -170,9 +155,7 @@ where
             connections: connections.clone(),
             semaphore: Arc::new(Semaphore::new(max_size)),
             max_size,
-            connection_params,
-            connection_creator,
-            connection_validator,
+            manager,
             max_idle_time,
             connection_timeout,
             cleanup_controller: cleanup_controller.clone(),
@@ -189,7 +172,7 @@ where
         pool
     }
 
-    pub async fn get_connection(self: Arc<Self>) -> Result<PooledStream<T, P, C, V>, PoolError<C::Error>> {
+    pub async fn get_connection(self: Arc<Self>) -> Result<PooledStream<M>, PoolError<M::Error>> {
         log::debug!("Attempting to get connection from pool");
 
         // Use semaphore to limit concurrent connections
@@ -208,7 +191,7 @@ where
                 let age = Instant::now().duration_since(pooled_conn.created_at);
                 if age >= self.max_idle_time {
                     log::debug!("Connection expired (age: {age:?}), discarding");
-                } else if self.connection_validator.is_valid(&pooled_conn.connection).await {
+                } else if self.manager.is_valid(&pooled_conn.connection).await {
                     log::debug!("Reusing existing connection from pool (remaining: {})", connections.len());
                     return Ok(PooledStream {
                         connection: Some(pooled_conn.connection),
@@ -223,12 +206,7 @@ where
 
         log::trace!("No valid connection available, creating new connection...");
         // Create new connection
-        match timeout(
-            self.connection_timeout,
-            self.connection_creator.create_connection(&self.connection_params),
-        )
-        .await
-        {
+        match timeout(self.connection_timeout, self.manager.create_connection()).await {
             Ok(Ok(connection)) => {
                 log::info!("Successfully created new connection");
                 Ok(PooledStream {
@@ -265,15 +243,11 @@ where
     }
 }
 
-// Implementation without trait bounds for basic operations
-impl<T, P, C, V> ConnectionPool<T, P, C, V>
+impl<M> ConnectionPool<M>
 where
-    T: Send + 'static,
-    P: Send + Sync + Clone + 'static,
-    C: Send + Sync + 'static,
-    V: Send + Sync + 'static,
+    M: ConnectionManager + Send + Sync + 'static,
 {
-    async fn return_connection(&self, connection: T) {
+    async fn return_connection(&self, connection: M::Connection) {
         let mut connections = self.connections.lock().await;
         if connections.len() < self.max_size {
             connections.push_back(PooledConnection {
@@ -288,12 +262,9 @@ where
     }
 }
 
-impl<T, P, C, V> Drop for PooledStream<T, P, C, V>
+impl<M> Drop for PooledStream<M>
 where
-    T: Send + 'static,
-    P: Send + Sync + Clone + 'static,
-    C: Send + Sync + 'static,
-    V: Send + Sync + 'static,
+    M: ConnectionManager + Send + Sync + 'static,
 {
     fn drop(&mut self) {
         if let Some(connection) = self.connection.take() {
@@ -309,51 +280,39 @@ where
 }
 
 // Generic implementations for AsRef and AsMut
-impl<T, P, C, V> AsRef<T> for PooledStream<T, P, C, V>
+impl<M> AsRef<M::Connection> for PooledStream<M>
 where
-    T: Send + 'static,
-    P: Send + Sync + Clone + 'static,
-    C: Send + Sync + 'static,
-    V: Send + Sync + 'static,
+    M: ConnectionManager + Send + Sync + 'static,
 {
-    fn as_ref(&self) -> &T {
+    fn as_ref(&self) -> &M::Connection {
         self.connection.as_ref().unwrap()
     }
 }
 
-impl<T, P, C, V> AsMut<T> for PooledStream<T, P, C, V>
+impl<M> AsMut<M::Connection> for PooledStream<M>
 where
-    T: Send + 'static,
-    P: Send + Sync + Clone + 'static,
-    C: Send + Sync + 'static,
-    V: Send + Sync + 'static,
+    M: ConnectionManager + Send + Sync + 'static,
 {
-    fn as_mut(&mut self) -> &mut T {
+    fn as_mut(&mut self) -> &mut M::Connection {
         self.connection.as_mut().unwrap()
     }
 }
 
 // Implement Deref and DerefMut for PooledStream
-impl<T, P, C, V> std::ops::Deref for PooledStream<T, P, C, V>
+impl<M> std::ops::Deref for PooledStream<M>
 where
-    T: Send + 'static,
-    P: Send + Sync + Clone + 'static,
-    C: Send + Sync + 'static,
-    V: Send + Sync + 'static,
+    M: ConnectionManager + Send + Sync + 'static,
 {
-    type Target = T;
+    type Target = M::Connection;
 
     fn deref(&self) -> &Self::Target {
         self.connection.as_ref().unwrap()
     }
 }
 
-impl<T, P, C, V> std::ops::DerefMut for PooledStream<T, P, C, V>
+impl<M> std::ops::DerefMut for PooledStream<M>
 where
-    T: Send + 'static,
-    P: Send + Sync + Clone + 'static,
-    C: Send + Sync + 'static,
-    V: Send + Sync + 'static,
+    M: ConnectionManager + Send + Sync + 'static,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.connection.as_mut().unwrap()
@@ -384,61 +343,5 @@ impl<E: std::error::Error + 'static> std::error::Error for PoolError<E> {
             PoolError::Creation(e) => Some(e),
             _ => None,
         }
-    }
-}
-
-// Implement for TcpStream
-pub struct TcpConnectionCreator;
-
-impl<A> ConnectionCreator<TcpStream, A> for TcpConnectionCreator
-where
-    A: ToSocketAddrs + Send + Sync + Clone + 'static,
-{
-    type Error = std::io::Error;
-    type Future = std::pin::Pin<Box<dyn Future<Output = Result<TcpStream, Self::Error>> + Send>>;
-
-    fn create_connection(&self, address: &A) -> Self::Future {
-        let addr = address.clone();
-        Box::pin(async move { TcpStream::connect(addr).await })
-    }
-}
-
-pub struct TcpConnectionValidator;
-
-impl ConnectionValidator<TcpStream> for TcpConnectionValidator {
-    async fn is_valid(&self, stream: &TcpStream) -> bool {
-        // Simple validation: check if the stream is readable and writable
-        stream
-            .ready(tokio::io::Interest::READABLE | tokio::io::Interest::WRITABLE)
-            .await
-            .is_ok()
-    }
-}
-
-// Convenience type aliases
-pub type TcpConnectionPool<A = std::net::SocketAddr> = ConnectionPool<TcpStream, A, TcpConnectionCreator, TcpConnectionValidator>;
-pub type TcpPooledStream<A = std::net::SocketAddr> = PooledStream<TcpStream, A, TcpConnectionCreator, TcpConnectionValidator>;
-
-impl<A> TcpConnectionPool<A>
-where
-    A: ToSocketAddrs + Send + Sync + Clone + 'static,
-{
-    pub fn new_tcp(
-        max_size: Option<usize>,
-        max_idle_time: Option<Duration>,
-        connection_timeout: Option<Duration>,
-        cleanup_config: Option<CleanupConfig>,
-        address: A,
-    ) -> Arc<Self> {
-        log::info!("Creating TCP connection pool");
-        Self::new(
-            max_size,
-            max_idle_time,
-            connection_timeout,
-            cleanup_config,
-            address,
-            TcpConnectionCreator,
-            TcpConnectionValidator,
-        )
     }
 }

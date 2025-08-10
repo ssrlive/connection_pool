@@ -1,11 +1,10 @@
-use connection_pool::TcpConnectionPool;
-use std::net::SocketAddr;
-use std::time::Duration;
-
 #[cfg(test)]
+#[cfg(feature = "tcp")]
 #[tokio::test]
 async fn test_to_socket_addrs_support() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
+    use connection_pool::TcpConnectionPool;
+    use std::net::SocketAddr;
+    use std::time::Duration;
 
     println!("Testing ToSocketAddrs support");
 

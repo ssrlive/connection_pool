@@ -1,5 +1,6 @@
-use connection_pool::{ConnectionCreator, ConnectionPool, ConnectionValidator};
+use connection_pool::ConnectionPool;
 use std::future::Future;
+use std::pin::Pin;
 
 // Custom connection type - simulating database connection
 #[derive(Debug)]
@@ -26,20 +27,27 @@ pub struct DbConnectionParams {
     pub database: String,
 }
 
-// Database connection creator
-pub struct DbConnectionCreator;
+// Database connection manager
+#[derive(Clone)]
+pub struct DbConnectionManager {
+    pub params: DbConnectionParams,
+}
 
-impl ConnectionCreator<DatabaseConnection, DbConnectionParams> for DbConnectionCreator {
-    type Error = String;
-    type Future = std::pin::Pin<Box<dyn Future<Output = Result<DatabaseConnection, Self::Error>> + Send>>;
+impl DbConnectionManager {
+    pub fn new(params: DbConnectionParams) -> Self {
+        Self { params }
+    }
+}
 
-    fn create_connection(&self, params: &DbConnectionParams) -> Self::Future {
-        let _params = params.clone();
+impl connection_pool::ConnectionManager for DbConnectionManager {
+    type Connection = DatabaseConnection;
+    type Error = std::io::Error;
+    type CreateFut = Pin<Box<dyn Future<Output = Result<DatabaseConnection, Self::Error>> + Send>>;
+    type ValidFut<'a> = Pin<Box<dyn Future<Output = bool> + Send + 'a>>;
+
+    fn create_connection(&self) -> Self::CreateFut {
         Box::pin(async move {
-            // Simulate database connection process
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-            // Use a simple counter
             static mut COUNTER: u32 = 0;
             unsafe {
                 COUNTER += 1;
@@ -47,19 +55,14 @@ impl ConnectionCreator<DatabaseConnection, DbConnectionParams> for DbConnectionC
             }
         })
     }
-}
 
-// Database connection validator
-pub struct DbConnectionValidator;
-
-impl ConnectionValidator<DatabaseConnection> for DbConnectionValidator {
-    async fn is_valid(&self, connection: &DatabaseConnection) -> bool {
-        connection.is_alive()
+    fn is_valid<'a>(&'a self, connection: &'a Self::Connection) -> Self::ValidFut<'a> {
+        Box::pin(async move { connection.is_alive() })
     }
 }
 
 // Database connection pool type alias
-pub type DbConnectionPool = ConnectionPool<DatabaseConnection, DbConnectionParams, DbConnectionCreator, DbConnectionValidator>;
+pub type DbConnectionPool = ConnectionPool<DbConnectionManager>;
 
 pub async fn example_db_pool() -> Result<(), Box<dyn std::error::Error>> {
     let params = DbConnectionParams {
@@ -71,14 +74,13 @@ pub async fn example_db_pool() -> Result<(), Box<dyn std::error::Error>> {
     println!("Creating database connection pool...");
 
     // Create database connection pool
+    let manager = DbConnectionManager::new(params);
     let pool = DbConnectionPool::new(
-        Some(3),               // Maximum number of connections
-        None,                  // Use default idle timeout
-        None,                  // Use default connection timeout
-        None,                  // Use default cleanup config (enabled with 30s interval)
-        params,                // Connection parameters
-        DbConnectionCreator,   // Connection creator
-        DbConnectionValidator, // Connection validator
+        Some(3), // Maximum number of connections
+        None,    // Use default idle timeout
+        None,    // Use default connection timeout
+        None,    // Use default cleanup config (enabled with 30s interval)
+        manager,
     );
 
     println!("Testing concurrent connection acquisition...");

@@ -12,6 +12,9 @@ readme = "README.md"
 repository = "https://github.com/ssrlive/connection-pool"
 documentation = "https://docs.rs/connection-pool"
 
+[features]
+tcp = []
+
 [dependencies]
 log = "0.4.27"
 tokio = { version = "1.47.1", features = ["full"] }
@@ -26,7 +29,9 @@ path = "examples/db_example.rs"
 [[example]]
 name = "echo_example"
 path = "examples/echo_example.rs"
+required-features = ["tcp"]
 
 [[example]]
 name = "background_cleanup_example"
 path = "examples/background_cleanup_example.rs"
+required-features = ["tcp"]

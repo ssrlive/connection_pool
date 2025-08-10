@@ -1,6 +1,6 @@
 # Connection Pool
 
-A high-performance, generic async connection pool for Rust with background cleanup and comprehensive logging.
+A flexible, high-performance, generic async connection pool for Rust with background cleanup and comprehensive logging.
 
 [![Crates.io](https://img.shields.io/crates/v/connection-pool.svg)](https://crates.io/crates/connection-pool)
 [![Documentation](https://docs.rs/connection-pool/badge.svg)](https://docs.rs/connection-pool)
@@ -17,173 +17,68 @@ A high-performance, generic async connection pool for Rust with background clean
 - 🔄 **Auto-Return**: RAII-based automatic connection return to pool
 - ⏱️ **Timeout Control**: Configurable timeouts for connection creation
 - 🎯 **Type Safe**: Compile-time guarantees with zero-cost abstractions
+- 🧩 **Extensible**: Custom connection types and validation logic via the `ConnectionManager` trait
+- 🌐 **Versatile**: Suitable for TCP, database, and any custom connection pooling
 
-## 🚀 Quick Start
-
-Add this to your `Cargo.toml`:
-
-```toml
-[dependencies]
-connection-pool = "0.1"
-tokio = { version = "1.0", features = ["full"] }
-```
-
-### Simple TCP Connection Pool
-
-```rust, no_run
-use connection_pool::TcpConnectionPool;
-use std::time::Duration;
-use tokio::io::AsyncWriteExt;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create a TCP connection pool
-    let pool = TcpConnectionPool::new_tcp(
-        Some(10),                                    // max connections
-        Some(Duration::from_secs(300)),             // idle timeout
-        Some(Duration::from_secs(10)),              // connection timeout
-        None,                                       // default cleanup config
-        "127.0.0.1:8080".to_string(),             // target address
-    );
-
-    // Get a connection from the pool
-    let mut conn = pool.get_connection().await?;
-    
-    // Use the connection (auto-derefs to TcpStream)
-    conn.write_all(b"Hello, World!").await?;
-    
-    // Connection automatically returns to pool when dropped
-    Ok(())
-}
-```
-
-## 🏗️ Custom Connection Types
-
-### Database Connection Example
+## Quick Start
 
 ```rust,no_run
-use connection_pool::{ConnectionCreator, ConnectionPool, ConnectionValidator};
+// 1. Define your ConnectionManager
+use connection_pool::{ConnectionManager, ConnectionPool};
 use std::future::Future;
+use std::pin::Pin;
+use tokio::net::TcpStream;
 
-// Define your connection type
-#[derive(Debug)]
-pub struct DatabaseConnection {
-    pub id: u32,
-    pub is_connected: bool,
+pub struct TcpConnectionManager {
+    pub address: std::net::SocketAddr,
 }
 
-// Define connection parameters
-#[derive(Clone)]
-pub struct DbParams {
-    pub host: String,
-    pub port: u16,
-    pub database: String,
-}
-
-// Implement connection creator
-pub struct DbCreator;
-
-impl ConnectionCreator<DatabaseConnection, DbParams> for DbCreator {
+impl ConnectionManager for TcpConnectionManager {
+    type Connection = TcpStream;
     type Error = std::io::Error;
-    type Future = std::pin::Pin<Box<dyn Future<Output = Result<DatabaseConnection, Self::Error>> + Send>>;
+    type CreateFut = Pin<Box<dyn Future<Output = Result<TcpStream, Self::Error>> + Send>>;
+    type ValidFut<'a> = Pin<Box<dyn Future<Output = bool> + Send + 'a>>;
 
-    fn create_connection(&self, params: &DbParams) -> Self::Future {
-        let _params = params.clone();
+    fn create_connection(&self) -> Self::CreateFut {
+        let addr = self.address;
+        Box::pin(async move { TcpStream::connect(addr).await })
+    }
+
+    fn is_valid<'a>(&'a self, conn: &'a Self::Connection) -> Self::ValidFut<'a> {
         Box::pin(async move {
-            // Your connection logic here
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            Ok(DatabaseConnection { id: 1, is_connected: true })
+            conn.peer_addr().is_ok()
         })
     }
 }
 
-// Implement connection validator
-pub struct DbValidator;
-
-impl ConnectionValidator<DatabaseConnection> for DbValidator {
-    async fn is_valid(&self, connection: &DatabaseConnection) -> bool {
-        connection.is_connected
-    }
-}
-
-// Create your custom pool type
-type DbPool = ConnectionPool<DatabaseConnection, DbParams, DbCreator, DbValidator>;
-
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let params = DbParams {
-        host: "localhost".to_string(),
-        port: 5432,
-        database: "myapp".to_string(),
-    };
-
-    let pool = DbPool::new(
-        Some(5),     // max connections
-        None,        // default idle timeout
-        None,        // default connection timeout
-        None,        // default cleanup config
-        params,      // connection parameters
-        DbCreator,   // connection creator
-        DbValidator, // connection validator
+async fn main() -> std::io::Result<()> {
+    // 2. Create a connection pool
+    let manager = TcpConnectionManager { address: "127.0.0.1:8080".parse().unwrap() };
+    let pool = ConnectionPool::new(
+        Some(10), // max pool size
+        None,     // default idle timeout
+        None,     // default connection timeout
+        None,     // default cleanup config
+        manager,
     );
 
-    // Use the pool
-    let conn = pool.get_connection().await?;
-    println!("Connected to database with ID: {}", conn.id);
-
+    // 3. Acquire and use a connection
+    let mut conn = pool.clone().get_connection().await.unwrap();
+    use tokio::io::AsyncWriteExt;
+    conn.write_all(b"hello").await.unwrap();
     Ok(())
 }
 ```
 
-## 🧹 Background Cleanup Configuration
+## Advanced Usage
+- You can pool any connection type (e.g. database, API client) by implementing the `ConnectionManager` trait.
+- See `examples/db_example.rs` for a custom type example.
 
-Control the background cleanup behavior for optimal performance:
-
-```rust,ignore
-use connection_pool::{TcpConnectionPool, CleanupConfig};
-use std::time::Duration;
-
-let cleanup_config = CleanupConfig {
-    interval: Duration::from_secs(30),  // cleanup every 30 seconds
-    enabled: true,                      // enable background cleanup
-};
-
-let pool = TcpConnectionPool::new_tcp(
-    Some(10),
-    Some(Duration::from_secs(300)),
-    Some(Duration::from_secs(10)),
-    Some(cleanup_config),
-    "127.0.0.1:8080".to_string(),
-);
-
-// Runtime control
-pool.stop_cleanup_task().await;                    // stop cleanup
-pool.restart_cleanup_task(new_config).await;       // restart with new config
+## Testing
+```bash
+cargo test
 ```
-
-## 📊 Logging and Observability
-
-Enable comprehensive logging to monitor pool behavior:
-
-```rust,no_run
-// Initialize logger (using env_logger)
-env_logger::Builder::from_default_env()
-    .filter_level(log::LevelFilter::Info)  // or Debug for detailed info
-    .init();
-
-// The pool will log:
-// - Connection creation and reuse
-// - Background cleanup operations  
-// - Error conditions and warnings
-// - Performance metrics
-```
-
-Log levels:
-- `ERROR`: Connection creation failures
-- `WARN`: Validation failures, runtime issues
-- `INFO`: Pool creation, connection lifecycle
-- `DEBUG`: Detailed operation info, cleanup results
-- `TRACE`: Fine-grained debugging information
 
 ## 🎛️ Configuration Options
 
@@ -196,25 +91,37 @@ Log levels:
 
 ## 🏗️ Architecture
 
-The connection pool uses a sophisticated multi-layered architecture:
+
+The connection pool is now based on a single `ConnectionManager` abstraction:
 
 ```text
-┌─────────────────────────────────────────────────────────┐
-│                 ConnectionPool<T,P,C,V>                 │
-├─────────────────────────────────────────────────────────┤
-│  • Generic over connection type T                       │
-│  • Parameterized by P (connection params)               │  
-│  • Uses C: ConnectionCreator for connection creation    │
-│  • Uses V: ConnectionValidator for health checks        │
-└─────────────────────────────────────────────────────────┘
-                             │
-        ┌────────────────────┼─────────────────────┐
-        │                    │                     │
-┌───────▼──────┐    ┌────────▼─────────┐    ┌──────▼──────┐
-│   Semaphore  │    │ Background       │    │  Connection │
-│   (Capacity  │    │ Cleanup Task     │    │    Queue    │
-│   Control)   │    │ (Async Worker)   │    │ (VecDeque)  │
-└──────────────┘    └──────────────────┘    └─────────────┘
+┌──────────────────────────────────────────────┐
+│           ConnectionPool<M: Manager>         │
+├──────────────────────────────────────────────┤
+│  • Holds a user-defined ConnectionManager    │
+│  • Manages a queue of pooled connections     │
+│  • Semaphore for max concurrent connections  │
+│  • Background cleanup for idle connections   │
+└──────────────────────────────────────────────┘
+                │
+      ┌─────────┴─────────┐
+      │                   │
+┌─────▼─────┐   ┌─────────▼────────┐
+│ Semaphore │   │ Background Task  │
+│ (Limits   │   │ (Cleans up idle  │
+│  max conn)│   │  connections)    │
+└───────────┘   └──────────────────┘
+      │
+┌─────▼────────────┐
+│ Connection Queue │
+│ (VecDeque)       │
+└──────────────────┘
+      │
+┌─────▼────────────┐
+│  PooledStream    │
+│  (RAII wrapper   │
+│   auto-returns)  │
+└──────────────────┘
 ```
 
 ### Key Components
@@ -223,46 +130,6 @@ The connection pool uses a sophisticated multi-layered architecture:
 - **Background Cleanup**: Async task for removing expired connections  
 - **Connection Queue**: FIFO queue of available connections
 - **RAII Wrapper**: `PooledStream` for automatic connection return
-
-## 🔧 Advanced Usage
-
-### Multiple Access Patterns
-
-```rust,ignore
-let conn = pool.get_connection().await?;
-
-// Method 1: Auto-deref (most common)
-conn.write_all(b"data").await?;
-
-// Method 2: Explicit reference
-let tcp_stream: &TcpStream = conn.as_ref();
-tcp_stream.write_all(b"data").await?;
-
-// Method 3: Mutable reference
-let tcp_stream: &mut TcpStream = conn.as_mut();
-tcp_stream.write_all(b"data").await?;
-```
-
-### Error Handling
-
-```rust,ignore
-use connection_pool::PoolError;
-
-match pool.get_connection().await {
-    Ok(conn) => {
-        // Use connection
-    }
-    Err(PoolError::Timeout) => {
-        println!("Connection creation timed out");
-    }
-    Err(PoolError::PoolClosed) => {
-        println!("Pool has been closed");  
-    }
-    Err(PoolError::Creation(e)) => {
-        println!("Failed to create connection: {}", e);
-    }
-}
-```
 
 ## 🧪 Testing
 
