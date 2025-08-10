@@ -2,7 +2,7 @@ use crate::{CleanupConfig, ConnectionManager, ConnectionPool, PooledStream};
 use std::{sync::Arc, time::Duration};
 use tokio::net::{TcpStream, ToSocketAddrs};
 
-// Example implementation for TcpStream
+/// Example implementation for TcpStream
 pub struct TcpConnectionManager<A: ToSocketAddrs + Send + Sync + Clone + 'static> {
     pub address: A,
 }
@@ -31,14 +31,17 @@ where
     }
 }
 
-// Convenience type aliases
+/// Convenience type aliases for TCP connections
 pub type TcpConnectionPool<A = std::net::SocketAddr> = ConnectionPool<TcpConnectionManager<A>>;
+
+/// Pooled TCP stream
 pub type TcpPooledStream<A = std::net::SocketAddr> = PooledStream<TcpConnectionManager<A>>;
 
 impl<A> TcpConnectionPool<A>
 where
     A: ToSocketAddrs + Send + Sync + Clone + 'static,
 {
+    /// Create a new TCP connection pool
     pub fn new_tcp(
         max_size: Option<usize>,
         max_idle_time: Option<Duration>,

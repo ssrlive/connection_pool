@@ -22,6 +22,15 @@ A flexible, high-performance, generic async connection pool for Rust with backgr
 
 ## Quick Start
 
+Add `connection-pool` to your `Cargo.toml`:
+
+```toml
+[dependencies]
+connection-pool = "0.2"
+tokio = { version = "1.47", features = ["full"] }
+```
+Then you can use the connection pool in your application:
+
 ```rust,no_run
 // 1. Define your ConnectionManager
 use connection_pool::{ConnectionManager, ConnectionPool};

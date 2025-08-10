@@ -12,6 +12,9 @@ readme = "README.md"
 repository = "https://github.com/ssrlive/connection-pool"
 documentation = "https://docs.rs/connection-pool"
 
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 tcp = []
 
