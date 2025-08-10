@@ -88,18 +88,30 @@ impl Drop for CleanupTaskController {
     }
 }
 
+/// Manager responsible for creating new [`ConnectionManager::Connection`]s or checking existing ones.
 pub trait ConnectionManager: Sync + Send {
+    /// Type of [`ConnectionManager::Connection`]s that this [`ConnectionManager`] creates and recycles.
     type Connection: Send;
+
+    /// Error that this [`ConnectionManager`] can return when creating and/or recycling [`ConnectionManager::Connection`]s.
     type Error: std::error::Error + Send;
+
+    /// Future that resolves to a new [`ConnectionManager::Connection`] when created.
     type CreateFut: Future<Output = Result<Self::Connection, Self::Error>> + Send;
+
+    /// Future that resolves to true if the connection is valid, false otherwise.
     type ValidFut<'a>: Future<Output = bool> + Send
     where
         Self: 'a;
 
+    /// Create a new connection.
     fn create_connection(&self) -> Self::CreateFut;
+
+    /// Check if a connection is valid.
     fn is_valid<'a>(&'a self, connection: &'a Self::Connection) -> Self::ValidFut<'a>;
 }
 
+/// Connection pool
 pub struct ConnectionPool<M>
 where
     M: ConnectionManager + Send + Sync + 'static,
@@ -113,11 +125,13 @@ where
     cleanup_controller: Arc<Mutex<CleanupTaskController>>,
 }
 
+/// Pooled connection, used within the connection pool
 pub struct PooledConnection<T> {
     pub connection: T,
     pub created_at: Instant,
 }
 
+/// Pooled stream, provided for the outer world usage
 pub struct PooledStream<M>
 where
     M: ConnectionManager + Send + Sync + 'static,
@@ -131,6 +145,7 @@ impl<M> ConnectionPool<M>
 where
     M: ConnectionManager + Send + Sync + 'static,
 {
+    /// Create a new connection pool
     pub fn new(
         max_size: Option<usize>,
         max_idle_time: Option<Duration>,
@@ -172,6 +187,7 @@ where
         pool
     }
 
+    /// Get a connection from the pool
     pub async fn get_connection(self: Arc<Self>) -> Result<PooledStream<M>, PoolError<M::Error>> {
         log::debug!("Attempting to get connection from pool");
 
@@ -319,7 +335,7 @@ where
     }
 }
 
-/// Pool errors
+/// Connection pool errors
 #[derive(Debug)]
 pub enum PoolError<E> {
     PoolClosed,
