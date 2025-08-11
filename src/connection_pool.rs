@@ -194,28 +194,28 @@ where
         // Use semaphore to limit concurrent connections
         let permit = self.semaphore.clone().acquire_owned().await.map_err(|_| PoolError::PoolClosed)?;
 
+        // Try to get an existing connection from the pool
         {
-            // Try to get an existing connection from the pool
             let mut connections = self.connections.lock().await;
-
-            // With background cleanup enabled, we can skip the inline cleanup
-            // for better performance, but still do a quick validation
-            if let Some(pooled_conn) = connections.pop_front() {
+            loop {
+                let Some(pooled_conn) = connections.pop_front() else {
+                    // No available connection, break the loop
+                    break;
+                };
                 log::trace!("Found existing connection in pool, validating...");
-
-                // Quick check if connection is not obviously expired
                 let age = Instant::now().duration_since(pooled_conn.created_at);
+                let valid = self.manager.is_valid(&pooled_conn.connection).await;
                 if age >= self.max_idle_time {
                     log::debug!("Connection expired (age: {age:?}), discarding");
-                } else if self.manager.is_valid(&pooled_conn.connection).await {
+                } else if !valid {
+                    log::warn!("Connection validation failed, discarding invalid connection");
+                } else {
                     log::debug!("Reusing existing connection from pool (remaining: {})", connections.len());
                     return Ok(PooledStream {
                         connection: Some(pooled_conn.connection),
                         pool: self.clone(),
                         _permit: permit,
                     });
-                } else {
-                    log::warn!("Connection validation failed, discarding invalid connection");
                 }
             }
         }
