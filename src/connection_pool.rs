@@ -66,8 +66,7 @@ impl CleanupTaskController {
                     log::debug!("Background cleanup removed {removed_count} expired connections");
                 }
 
-                // Release the lock
-                drop(connections);
+                log::trace!("Current pool size after cleanup: {}", connections.len());
             }
         });
 
