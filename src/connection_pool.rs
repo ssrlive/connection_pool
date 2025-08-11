@@ -94,7 +94,7 @@ pub trait ConnectionManager: Sync + Send {
     type Connection: Send;
 
     /// Error that this [`ConnectionManager`] can return when creating and/or recycling [`ConnectionManager::Connection`]s.
-    type Error: std::error::Error + Send;
+    type Error: std::error::Error + Send + Sync + 'static;
 
     /// Future that resolves to a new [`ConnectionManager::Connection`] when created.
     type CreateFut: Future<Output = Result<Self::Connection, Self::Error>> + Send;
