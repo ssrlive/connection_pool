@@ -23,10 +23,11 @@ where
 
     fn is_valid<'a>(&'a self, stream: &'a Self::Connection) -> Self::ValidFut<'a> {
         Box::pin(async move {
-            stream
-                .ready(tokio::io::Interest::READABLE | tokio::io::Interest::WRITABLE)
-                .await
-                .is_ok()
+            let interest = tokio::io::Interest::READABLE | tokio::io::Interest::WRITABLE;
+            if let Ok(r) = stream.ready(interest).await {
+                return r.is_readable() && r.is_writable();
+            }
+            false
         })
     }
 }
