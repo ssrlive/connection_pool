@@ -262,7 +262,7 @@ impl<M> ConnectionPool<M>
 where
     M: ConnectionManager + Send + Sync + 'static,
 {
-    async fn return_connection(&self, connection: M::Connection) {
+    async fn recycle(&self, connection: M::Connection) {
         let mut connections = self.connections.lock().await;
         if connections.len() < self.max_size {
             connections.push_back(InnerConnection {
@@ -286,7 +286,7 @@ where
             let pool = self.pool.clone();
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
                 log::trace!("Returning connection to pool on drop");
-                tokio::task::block_in_place(|| handle.block_on(pool.return_connection(connection)));
+                tokio::task::block_in_place(|| handle.block_on(pool.recycle(connection)));
             } else {
                 log::warn!("No tokio runtime available, connection will be dropped");
             }
