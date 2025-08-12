@@ -1,11 +1,11 @@
 [package]
 name = "connection-pool"
-version = "0.2.8"
+version = "0.2.9"
 edition = "2024"
 authors = ["ssrlive"]
 description = "A high-performance, generic async connection pool for Rust with background cleanup and comprehensive logging"
 homepage = "https://github.com/ssrlive/connection-pool"
-keywords = ["async", "connection-pool", "tokio", "generic", "background-cleanup"]
+keywords = ["async", "connection-pool", "tokio", "generic", "pool"]
 categories = ["asynchronous", "network-programming", "database"]
 license = "MIT"
 readme = "README.md"

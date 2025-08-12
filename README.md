@@ -53,7 +53,7 @@ impl ConnectionManager for TcpConnectionManager {
         Box::pin(async move { TcpStream::connect(addr).await })
     }
 
-    fn is_valid<'a>(&'a self, conn: &'a Self::Connection) -> Self::ValidFut<'a> {
+    fn is_valid<'a>(&'a self, conn: &'a mut Self::Connection) -> Self::ValidFut<'a> {
         Box::pin(async move {
             conn.peer_addr().is_ok()
         })
