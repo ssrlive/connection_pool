@@ -1,6 +1,6 @@
 [package]
 name = "connection-pool"
-version = "0.2.6"
+version = "0.2.7"
 edition = "2024"
 authors = ["ssrlive"]
 description = "A high-performance, generic async connection pool for Rust with background cleanup and comprehensive logging"
@@ -17,6 +17,7 @@ all-features = true
 
 [features]
 tcp = []
+# default = ["tcp"]
 
 [dependencies]
 log = "0.4.27"

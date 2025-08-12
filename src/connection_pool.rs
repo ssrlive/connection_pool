@@ -28,18 +28,18 @@ impl Default for CleanupConfig {
 }
 
 /// Background cleanup task controller
-pub struct CleanupTaskController {
+struct CleanupTaskController {
     handle: Option<JoinHandle<()>>,
 }
 
 impl CleanupTaskController {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self { handle: None }
     }
 
-    pub fn start<T: Send + 'static>(
+    fn start<T: Send + 'static>(
         &mut self,
-        connections: Arc<Mutex<VecDeque<PooledConnection<T>>>>,
+        connections: Arc<Mutex<VecDeque<InnerConnection<T>>>>,
         max_idle_time: Duration,
         cleanup_interval: Duration,
     ) {
@@ -73,7 +73,7 @@ impl CleanupTaskController {
         self.handle = Some(handle);
     }
 
-    pub fn stop(&mut self) {
+    fn stop(&mut self) {
         if let Some(handle) = self.handle.take() {
             handle.abort();
             log::info!("Background cleanup task stopped");
@@ -115,7 +115,7 @@ pub struct ConnectionPool<M>
 where
     M: ConnectionManager + Send + Sync + 'static,
 {
-    connections: Arc<Mutex<VecDeque<PooledConnection<M::Connection>>>>,
+    connections: Arc<Mutex<VecDeque<InnerConnection<M::Connection>>>>,
     semaphore: Arc<Semaphore>,
     max_size: usize,
     manager: M,
@@ -124,14 +124,14 @@ where
     cleanup_controller: Arc<Mutex<CleanupTaskController>>,
 }
 
-/// Pooled connection, used within the connection pool
-pub struct PooledConnection<T> {
+/// Pooled inner connection, used within the connection pool
+struct InnerConnection<T> {
     pub connection: T,
     pub created_at: Instant,
 }
 
-/// Pooled stream, provided for the outer world usage
-pub struct PooledStream<M>
+/// Pooled managed stream, provided for the outer world usage
+pub struct ManagedConnection<M>
 where
     M: ConnectionManager + Send + Sync + 'static,
 {
@@ -187,7 +187,7 @@ where
     }
 
     /// Get a connection from the pool
-    pub async fn get_connection(self: Arc<Self>) -> Result<PooledStream<M>, PoolError<M::Error>> {
+    pub async fn get_connection(self: Arc<Self>) -> Result<ManagedConnection<M>, PoolError<M::Error>> {
         log::debug!("Attempting to get connection from pool");
 
         // Use semaphore to limit concurrent connections
@@ -210,7 +210,7 @@ where
                     log::warn!("Connection validation failed, discarding invalid connection");
                 } else {
                     log::debug!("Reusing existing connection from pool (remaining: {})", connections.len());
-                    return Ok(PooledStream {
+                    return Ok(ManagedConnection {
                         connection: Some(pooled_conn.connection),
                         pool: self.clone(),
                         _permit: permit,
@@ -224,7 +224,7 @@ where
         match timeout(self.connection_timeout, self.manager.create_connection()).await {
             Ok(Ok(connection)) => {
                 log::info!("Successfully created new connection");
-                Ok(PooledStream {
+                Ok(ManagedConnection {
                     connection: Some(connection),
                     pool: self.clone(),
                     _permit: permit,
@@ -265,7 +265,7 @@ where
     async fn return_connection(&self, connection: M::Connection) {
         let mut connections = self.connections.lock().await;
         if connections.len() < self.max_size {
-            connections.push_back(PooledConnection {
+            connections.push_back(InnerConnection {
                 connection,
                 created_at: Instant::now(),
             });
@@ -277,7 +277,7 @@ where
     }
 }
 
-impl<M> Drop for PooledStream<M>
+impl<M> Drop for ManagedConnection<M>
 where
     M: ConnectionManager + Send + Sync + 'static,
 {
@@ -295,7 +295,7 @@ where
 }
 
 // Generic implementations for AsRef and AsMut
-impl<M> AsRef<M::Connection> for PooledStream<M>
+impl<M> AsRef<M::Connection> for ManagedConnection<M>
 where
     M: ConnectionManager + Send + Sync + 'static,
 {
@@ -304,7 +304,7 @@ where
     }
 }
 
-impl<M> AsMut<M::Connection> for PooledStream<M>
+impl<M> AsMut<M::Connection> for ManagedConnection<M>
 where
     M: ConnectionManager + Send + Sync + 'static,
 {
@@ -314,7 +314,7 @@ where
 }
 
 // Implement Deref and DerefMut for PooledStream
-impl<M> std::ops::Deref for PooledStream<M>
+impl<M> std::ops::Deref for ManagedConnection<M>
 where
     M: ConnectionManager + Send + Sync + 'static,
 {
@@ -325,7 +325,7 @@ where
     }
 }
 
-impl<M> std::ops::DerefMut for PooledStream<M>
+impl<M> std::ops::DerefMut for ManagedConnection<M>
 where
     M: ConnectionManager + Send + Sync + 'static,
 {

@@ -1,4 +1,4 @@
-use crate::{CleanupConfig, ConnectionManager, ConnectionPool, PooledStream};
+use crate::{CleanupConfig, ConnectionManager, ConnectionPool, ManagedConnection};
 use std::{sync::Arc, time::Duration};
 use tokio::net::{TcpStream, ToSocketAddrs};
 
@@ -35,8 +35,8 @@ where
 /// Convenience type aliases for TCP connections
 pub type TcpConnectionPool<A = std::net::SocketAddr> = ConnectionPool<TcpConnectionManager<A>>;
 
-/// Pooled TCP stream
-pub type TcpPooledStream<A = std::net::SocketAddr> = PooledStream<TcpConnectionManager<A>>;
+/// Managed TCP stream
+pub type TcpManagedConnection<A = std::net::SocketAddr> = ManagedConnection<TcpConnectionManager<A>>;
 
 impl<A> TcpConnectionPool<A>
 where
