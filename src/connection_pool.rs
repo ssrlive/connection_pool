@@ -262,7 +262,11 @@ impl<M> ConnectionPool<M>
 where
     M: ConnectionManager + Send + Sync + 'static,
 {
-    async fn recycle(&self, connection: M::Connection) {
+    async fn recycle(&self, mut connection: M::Connection) {
+        if !self.manager.is_valid(&mut connection).await {
+            log::debug!("Invalid connection, dropping");
+            return;
+        }
         let mut connections = self.connections.lock().await;
         if connections.len() < self.max_size {
             connections.push_back(InnerConnection {
