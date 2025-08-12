@@ -107,7 +107,7 @@ pub trait ConnectionManager: Sync + Send {
     fn create_connection(&self) -> Self::CreateFut;
 
     /// Check if a connection is valid.
-    fn is_valid<'a>(&'a self, connection: &'a Self::Connection) -> Self::ValidFut<'a>;
+    fn is_valid<'a>(&'a self, connection: &'a mut Self::Connection) -> Self::ValidFut<'a>;
 }
 
 /// Connection pool
@@ -197,13 +197,13 @@ where
         {
             let mut connections = self.connections.lock().await;
             loop {
-                let Some(pooled_conn) = connections.pop_front() else {
+                let Some(mut pooled_conn) = connections.pop_front() else {
                     // No available connection, break the loop
                     break;
                 };
                 log::trace!("Found existing connection in pool, validating...");
                 let age = Instant::now().duration_since(pooled_conn.created_at);
-                let valid = self.manager.is_valid(&pooled_conn.connection).await;
+                let valid = self.manager.is_valid(&mut pooled_conn.connection).await;
                 if age >= self.max_idle_time {
                     log::debug!("Connection expired (age: {age:?}), discarding");
                 } else if !valid {

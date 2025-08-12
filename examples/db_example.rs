@@ -56,7 +56,7 @@ impl connection_pool::ConnectionManager for DbConnectionManager {
         })
     }
 
-    fn is_valid<'a>(&'a self, connection: &'a Self::Connection) -> Self::ValidFut<'a> {
+    fn is_valid<'a>(&'a self, connection: &'a mut Self::Connection) -> Self::ValidFut<'a> {
         Box::pin(async move { connection.is_alive() })
     }
 }

@@ -21,7 +21,7 @@ where
         Box::pin(async move { TcpStream::connect(addr).await })
     }
 
-    fn is_valid<'a>(&'a self, stream: &'a Self::Connection) -> Self::ValidFut<'a> {
+    fn is_valid<'a>(&'a self, stream: &'a mut Self::Connection) -> Self::ValidFut<'a> {
         Box::pin(async move {
             let interest = tokio::io::Interest::READABLE | tokio::io::Interest::WRITABLE;
             if let Ok(r) = stream.ready(interest).await {
