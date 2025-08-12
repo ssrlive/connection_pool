@@ -288,12 +288,10 @@ where
     fn drop(&mut self) {
         if let Some(connection) = self.connection.take() {
             let pool = self.pool.clone();
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            _ = tokio::spawn(async move {
                 log::trace!("Returning connection to pool on drop");
-                tokio::task::block_in_place(|| handle.block_on(pool.recycle(connection)));
-            } else {
-                log::warn!("No tokio runtime available, connection will be dropped");
-            }
+                pool.recycle(connection).await;
+            });
         }
     }
 }
