@@ -94,7 +94,7 @@ impl CleanupTaskController {
                     log::debug!("Background cleanup removed {removed_count} expired/invalid connections");
                 }
 
-                log::trace!("Current pool size after cleanup: {}", connections.len());
+                log::debug!("Current pool (remaining {}) after cleanup", connections.len());
             }
         });
 
@@ -254,7 +254,8 @@ where
                 } else if !valid {
                     log::warn!("Connection validation failed, discarding invalid connection");
                 } else {
-                    log::debug!("Reusing existing connection from pool (remaining: {})", connections.len());
+                    let size = connections.len();
+                    log::debug!("Reusing existing connection from pool (remaining: {size}/{})", self.max_size);
                     return Ok(ManagedConnection {
                         connection: Some(pooled_conn.connection),
                         pool: self.clone(),
@@ -319,9 +320,9 @@ where
                 connection,
                 created_at: Instant::now(),
             });
-            log::trace!("Connection returned to pool (pool size: {})", connections.len());
+            log::debug!("Connection returned to pool (pool size: {}/{})", connections.len(), self.max_size);
         } else {
-            log::trace!("Pool is full, dropping connection (max_size: {})", self.max_size);
+            log::debug!("Pool is full, dropping connection (pool max size: {})", self.max_size);
         }
         // If the pool is full, the connection will be dropped (automatically closed)
     }
