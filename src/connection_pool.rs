@@ -30,11 +30,15 @@ impl Default for CleanupConfig {
 /// Background cleanup task controller
 struct CleanupTaskController {
     handle: Option<JoinHandle<()>>,
+    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl CleanupTaskController {
     fn new() -> Self {
-        Self { handle: None }
+        Self {
+            handle: None,
+            shutdown_tx: None,
+        }
     }
 
     fn start<T, M>(
@@ -51,13 +55,20 @@ impl CleanupTaskController {
             log::warn!("Cleanup task is already running");
             return;
         }
-
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
+        self.shutdown_tx = Some(shutdown_tx);
         let handle = tokio::spawn(async move {
             let mut interval_timer = interval(cleanup_interval);
             log::info!("Background cleanup task started with interval: {cleanup_interval:?}");
 
             loop {
-                interval_timer.tick().await;
+                tokio::select! {
+                    _ = interval_timer.tick() => {}
+                    _ = &mut shutdown_rx => {
+                        log::info!("Received shutdown signal, exiting cleanup loop");
+                        break;
+                    }
+                };
 
                 let mut connections = connections.lock().await;
                 let initial_count = connections.len();
@@ -90,17 +101,33 @@ impl CleanupTaskController {
         self.handle = Some(handle);
     }
 
-    fn stop(&mut self) {
+    async fn stop(&mut self) {
+        if let Some(shutdown_tx) = self.shutdown_tx.take() {
+            let _ = shutdown_tx.send(());
+        }
         if let Some(handle) = self.handle.take() {
+            if let Err(e) = handle.await {
+                log::error!("Error while stopping background cleanup task: {e}");
+            }
+            log::info!("Background cleanup task stopped in async stop");
+        }
+    }
+
+    fn stop_sync(&mut self) {
+        if let Some(shutdown_tx) = self.shutdown_tx.take() {
+            let _ = shutdown_tx.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            std::thread::sleep(std::time::Duration::from_millis(100));
             handle.abort();
-            log::info!("Background cleanup task stopped");
+            log::info!("Background cleanup task stopped in stop_sync");
         }
     }
 }
 
 impl Drop for CleanupTaskController {
     fn drop(&mut self) {
-        self.stop();
+        self.stop_sync();
     }
 }
 
@@ -262,7 +289,7 @@ where
     /// Stop the background cleanup task
     pub async fn stop_cleanup_task(&self) {
         let mut controller = self.cleanup_controller.lock().await;
-        controller.stop();
+        controller.stop().await;
     }
 
     /// Restart the background cleanup task with new configuration

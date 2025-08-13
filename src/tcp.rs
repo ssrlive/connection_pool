@@ -24,11 +24,18 @@ where
 
     fn is_valid<'a>(&'a self, stream: &'a mut Self::Connection) -> Self::ValidFut<'a> {
         Box::pin(async move {
-            let interest = tokio::io::Interest::READABLE | tokio::io::Interest::WRITABLE;
-            if let Ok(r) = stream.ready(interest).await {
-                return r.is_readable() && r.is_writable();
+            if stream.peer_addr().is_err() {
+                return false;
             }
-            false
+            // try to read a byte without consuming
+            let mut buf = [0u8; 1];
+            match stream.try_read(&mut buf) {
+                Ok(0) => return false,                                         // EOF
+                Ok(_) => {}                                                    // existing readable data
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {} // no data but connection is fine
+                Err(_) => return false,
+            }
+            true
         })
     }
 }
