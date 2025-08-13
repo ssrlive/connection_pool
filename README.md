@@ -38,6 +38,7 @@ use std::future::Future;
 use std::pin::Pin;
 use tokio::net::TcpStream;
 
+#[derive(Clone)]
 pub struct TcpConnectionManager {
     pub address: std::net::SocketAddr,
 }

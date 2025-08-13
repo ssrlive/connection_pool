@@ -3,6 +3,7 @@ use std::{sync::Arc, time::Duration};
 use tokio::net::{TcpStream, ToSocketAddrs};
 
 /// Example implementation for TcpStream
+#[derive(Clone)]
 pub struct TcpConnectionManager<A: ToSocketAddrs + Send + Sync + Clone + 'static> {
     pub address: A,
 }

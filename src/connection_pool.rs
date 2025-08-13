@@ -37,12 +37,16 @@ impl CleanupTaskController {
         Self { handle: None }
     }
 
-    fn start<T: Send + 'static>(
+    fn start<T, M>(
         &mut self,
         connections: Arc<Mutex<VecDeque<InnerConnection<T>>>>,
         max_idle_time: Duration,
         cleanup_interval: Duration,
-    ) {
+        manager: Arc<M>,
+    ) where
+        T: Send + 'static,
+        M: ConnectionManager<Connection = T> + Send + Sync + 'static,
+    {
         if self.handle.is_some() {
             log::warn!("Cleanup task is already running");
             return;
@@ -59,11 +63,24 @@ impl CleanupTaskController {
                 let initial_count = connections.len();
                 let now = Instant::now();
 
-                connections.retain(|conn| now.duration_since(conn.created_at) < max_idle_time);
+                // check both idle time and is_valid
+                let mut valid_connections = VecDeque::new();
+                for mut conn in connections.drain(..) {
+                    let not_expired = now.duration_since(conn.created_at) < max_idle_time;
+                    let is_valid = if not_expired {
+                        manager.is_valid(&mut conn.connection).await
+                    } else {
+                        false
+                    };
+                    if not_expired && is_valid {
+                        valid_connections.push_back(conn);
+                    }
+                }
+                let removed_count = initial_count - valid_connections.len();
+                *connections = valid_connections;
 
-                let removed_count = initial_count - connections.len();
                 if removed_count > 0 {
-                    log::debug!("Background cleanup removed {removed_count} expired connections");
+                    log::debug!("Background cleanup removed {removed_count} expired/invalid connections");
                 }
 
                 log::trace!("Current pool size after cleanup: {}", connections.len());
@@ -88,7 +105,7 @@ impl Drop for CleanupTaskController {
 }
 
 /// Manager responsible for creating new [`ConnectionManager::Connection`]s or checking existing ones.
-pub trait ConnectionManager: Sync + Send {
+pub trait ConnectionManager: Sync + Send + Clone {
     /// Type of [`ConnectionManager::Connection`]s that this [`ConnectionManager`] creates and recycles.
     type Connection: Send;
 
@@ -113,7 +130,7 @@ pub trait ConnectionManager: Sync + Send {
 /// Connection pool
 pub struct ConnectionPool<M>
 where
-    M: ConnectionManager + Send + Sync + 'static,
+    M: ConnectionManager + Send + Sync + Clone + 'static,
 {
     connections: Arc<Mutex<VecDeque<InnerConnection<M::Connection>>>>,
     semaphore: Arc<Semaphore>,
@@ -142,7 +159,7 @@ where
 
 impl<M> ConnectionPool<M>
 where
-    M: ConnectionManager + Send + Sync + 'static,
+    M: ConnectionManager + Send + Sync + Clone + 'static,
 {
     /// Create a new connection pool
     pub fn new(
@@ -177,9 +194,10 @@ where
 
         // Start background cleanup task if enabled
         if cleanup_config.enabled {
+            let manager = Arc::new(pool.manager.clone());
             tokio::spawn(async move {
                 let mut controller = cleanup_controller.lock().await;
-                controller.start(connections, max_idle_time, cleanup_config.interval);
+                controller.start(connections, max_idle_time, cleanup_config.interval, manager);
             });
         }
 
@@ -249,18 +267,19 @@ where
 
     /// Restart the background cleanup task with new configuration
     pub async fn restart_cleanup_task(&self, cleanup_config: CleanupConfig) {
-        let mut controller = self.cleanup_controller.lock().await;
-        controller.stop();
+        self.stop_cleanup_task().await;
 
         if cleanup_config.enabled {
-            controller.start(self.connections.clone(), self.max_idle_time, cleanup_config.interval);
+            let manager = Arc::new(self.manager.clone());
+            let mut controller = self.cleanup_controller.lock().await;
+            controller.start(self.connections.clone(), self.max_idle_time, cleanup_config.interval, manager);
         }
     }
 }
 
 impl<M> ConnectionPool<M>
 where
-    M: ConnectionManager + Send + Sync + 'static,
+    M: ConnectionManager + Send + Sync + Clone + 'static,
 {
     async fn recycle(&self, mut connection: M::Connection) {
         if !self.manager.is_valid(&mut connection).await {
@@ -283,7 +302,7 @@ where
 
 impl<M> Drop for ManagedConnection<M>
 where
-    M: ConnectionManager + Send + Sync + 'static,
+    M: ConnectionManager + Send + Sync + Clone + 'static,
 {
     fn drop(&mut self) {
         if let Some(connection) = self.connection.take() {
@@ -299,7 +318,7 @@ where
 // Generic implementations for AsRef and AsMut
 impl<M> AsRef<M::Connection> for ManagedConnection<M>
 where
-    M: ConnectionManager + Send + Sync + 'static,
+    M: ConnectionManager + Send + Sync + Clone + 'static,
 {
     fn as_ref(&self) -> &M::Connection {
         self.connection.as_ref().unwrap()
@@ -308,7 +327,7 @@ where
 
 impl<M> AsMut<M::Connection> for ManagedConnection<M>
 where
-    M: ConnectionManager + Send + Sync + 'static,
+    M: ConnectionManager + Send + Sync + Clone + 'static,
 {
     fn as_mut(&mut self) -> &mut M::Connection {
         self.connection.as_mut().unwrap()
@@ -318,7 +337,7 @@ where
 // Implement Deref and DerefMut for PooledStream
 impl<M> std::ops::Deref for ManagedConnection<M>
 where
-    M: ConnectionManager + Send + Sync + 'static,
+    M: ConnectionManager + Send + Sync + Clone + 'static,
 {
     type Target = M::Connection;
 
@@ -329,7 +348,7 @@ where
 
 impl<M> std::ops::DerefMut for ManagedConnection<M>
 where
-    M: ConnectionManager + Send + Sync + 'static,
+    M: ConnectionManager + Send + Sync + Clone + 'static,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.connection.as_mut().unwrap()
