@@ -47,6 +47,7 @@ impl CleanupTaskController {
         max_idle_time: Duration,
         cleanup_interval: Duration,
         manager: Arc<M>,
+        max_size: usize,
     ) where
         T: Send + 'static,
         M: ConnectionManager<Connection = T> + Send + Sync + 'static,
@@ -94,7 +95,7 @@ impl CleanupTaskController {
                     log::debug!("Background cleanup removed {removed_count} expired/invalid connections");
                 }
 
-                log::debug!("Current pool (remaining {}) after cleanup", connections.len());
+                log::debug!("Current pool (remaining {}/{max_size}) after cleanup", connections.len());
             }
         });
 
@@ -166,6 +167,7 @@ where
     max_idle_time: Duration,
     connection_timeout: Duration,
     cleanup_controller: Arc<Mutex<CleanupTaskController>>,
+    outstanding_count: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// Pooled inner connection, used within the connection pool
@@ -182,6 +184,25 @@ where
     connection: Option<M::Connection>,
     pool: Arc<ConnectionPool<M>>,
     _permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+impl<M> ManagedConnection<M>
+where
+    M: ConnectionManager,
+{
+    /// Consume the managed connection and return the inner connection
+    pub fn into_inner(mut self) -> M::Connection {
+        self.connection.take().unwrap()
+    }
+
+    fn new(connection: M::Connection, pool: Arc<ConnectionPool<M>>, permit: tokio::sync::OwnedSemaphorePermit) -> Self {
+        pool.outstanding_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        ManagedConnection {
+            connection: Some(connection),
+            pool,
+            _permit: permit,
+        }
+    }
 }
 
 impl<M> ConnectionPool<M>
@@ -217,6 +238,7 @@ where
             max_idle_time,
             connection_timeout,
             cleanup_controller: cleanup_controller.clone(),
+            outstanding_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         });
 
         // Start background cleanup task if enabled
@@ -224,7 +246,7 @@ where
             let manager = Arc::new(pool.manager.clone());
             tokio::spawn(async move {
                 let mut controller = cleanup_controller.lock().await;
-                controller.start(connections, max_idle_time, cleanup_config.interval, manager);
+                controller.start(connections, max_idle_time, cleanup_config.interval, manager, max_size);
             });
         }
 
@@ -256,11 +278,7 @@ where
                 } else {
                     let size = connections.len();
                     log::debug!("Reusing existing connection from pool (remaining: {size}/{})", self.max_size);
-                    return Ok(ManagedConnection {
-                        connection: Some(pooled_conn.connection),
-                        pool: self.clone(),
-                        _permit: permit,
-                    });
+                    return Ok(ManagedConnection::new(pooled_conn.connection, self.clone(), permit));
                 }
             }
         }
@@ -270,11 +288,7 @@ where
         match timeout(self.connection_timeout, self.manager.create_connection()).await {
             Ok(Ok(connection)) => {
                 log::info!("Successfully created new connection");
-                Ok(ManagedConnection {
-                    connection: Some(connection),
-                    pool: self.clone(),
-                    _permit: permit,
-                })
+                Ok(ManagedConnection::new(connection, self.clone(), permit))
             }
             Ok(Err(e)) => {
                 log::error!("Failed to create new connection");
@@ -285,6 +299,18 @@ where
                 Err(PoolError::Timeout)
             }
         }
+    }
+
+    pub fn outstanding_count(&self) -> usize {
+        self.outstanding_count.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub async fn pool_size(&self) -> usize {
+        self.connections.lock().await.len()
+    }
+
+    pub fn max_size(&self) -> usize {
+        self.max_size
     }
 
     /// Stop the background cleanup task
@@ -300,14 +326,15 @@ where
         if cleanup_config.enabled {
             let manager = Arc::new(self.manager.clone());
             let mut controller = self.cleanup_controller.lock().await;
-            controller.start(self.connections.clone(), self.max_idle_time, cleanup_config.interval, manager);
+            let m = self.max_size;
+            controller.start(self.connections.clone(), self.max_idle_time, cleanup_config.interval, manager, m);
         }
     }
 }
 
 impl<M> ConnectionPool<M>
 where
-    M: ConnectionManager + Send + Sync + Clone + 'static,
+    M: ConnectionManager,
 {
     async fn recycle(&self, mut connection: M::Connection) {
         if !self.manager.is_valid(&mut connection).await {
@@ -320,7 +347,7 @@ where
                 connection,
                 created_at: Instant::now(),
             });
-            log::debug!("Connection returned to pool (pool size: {}/{})", connections.len(), self.max_size);
+            log::debug!("Connection recycled to pool (pool size: {}/{})", connections.len(), self.max_size);
         } else {
             log::debug!("Pool is full, dropping connection (pool max size: {})", self.max_size);
         }
@@ -333,10 +360,11 @@ where
     M: ConnectionManager + Send + Sync + Clone + 'static,
 {
     fn drop(&mut self) {
+        self.pool.outstanding_count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         if let Some(connection) = self.connection.take() {
             let pool = self.pool.clone();
             _ = tokio::spawn(async move {
-                log::trace!("Returning connection to pool on drop");
+                log::trace!("Recycling connection to pool on drop");
                 pool.recycle(connection).await;
             });
         }
