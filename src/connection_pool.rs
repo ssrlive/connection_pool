@@ -156,10 +156,7 @@ pub trait ConnectionManager: Sync + Send + Clone {
 }
 
 /// Connection pool
-pub struct ConnectionPool<M>
-where
-    M: ConnectionManager + Send + Sync + Clone + 'static,
-{
+pub struct ConnectionPool<M: ConnectionManager> {
     connections: Arc<Mutex<VecDeque<InnerConnection<M::Connection>>>>,
     semaphore: Arc<Semaphore>,
     max_size: usize,
@@ -186,10 +183,7 @@ where
     _permit: tokio::sync::OwnedSemaphorePermit,
 }
 
-impl<M> ManagedConnection<M>
-where
-    M: ConnectionManager,
-{
+impl<M: ConnectionManager> ManagedConnection<M> {
     /// Consume the managed connection and return the inner connection
     pub fn into_inner(mut self) -> M::Connection {
         self.connection.take().unwrap()
@@ -332,10 +326,7 @@ where
     }
 }
 
-impl<M> ConnectionPool<M>
-where
-    M: ConnectionManager,
-{
+impl<M: ConnectionManager> ConnectionPool<M> {
     async fn recycle(&self, mut connection: M::Connection) {
         if !self.manager.is_valid(&mut connection).await {
             log::debug!("Invalid connection, dropping");
@@ -355,10 +346,7 @@ where
     }
 }
 
-impl<M> Drop for ManagedConnection<M>
-where
-    M: ConnectionManager + Send + Sync + Clone + 'static,
-{
+impl<M: ConnectionManager> Drop for ManagedConnection<M> {
     fn drop(&mut self) {
         self.pool.outstanding_count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         if let Some(connection) = self.connection.take() {
@@ -372,29 +360,20 @@ where
 }
 
 // Generic implementations for AsRef and AsMut
-impl<M> AsRef<M::Connection> for ManagedConnection<M>
-where
-    M: ConnectionManager + Send + Sync + Clone + 'static,
-{
+impl<M: ConnectionManager> AsRef<M::Connection> for ManagedConnection<M> {
     fn as_ref(&self) -> &M::Connection {
         self.connection.as_ref().unwrap()
     }
 }
 
-impl<M> AsMut<M::Connection> for ManagedConnection<M>
-where
-    M: ConnectionManager + Send + Sync + Clone + 'static,
-{
+impl<M: ConnectionManager> AsMut<M::Connection> for ManagedConnection<M> {
     fn as_mut(&mut self) -> &mut M::Connection {
         self.connection.as_mut().unwrap()
     }
 }
 
 // Implement Deref and DerefMut for PooledStream
-impl<M> std::ops::Deref for ManagedConnection<M>
-where
-    M: ConnectionManager + Send + Sync + Clone + 'static,
-{
+impl<M: ConnectionManager> std::ops::Deref for ManagedConnection<M> {
     type Target = M::Connection;
 
     fn deref(&self) -> &Self::Target {
@@ -402,10 +381,7 @@ where
     }
 }
 
-impl<M> std::ops::DerefMut for ManagedConnection<M>
-where
-    M: ConnectionManager + Send + Sync + Clone + 'static,
-{
+impl<M: ConnectionManager> std::ops::DerefMut for ManagedConnection<M> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.connection.as_mut().unwrap()
     }
